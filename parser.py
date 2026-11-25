@@ -4,6 +4,9 @@ ALIASES = (".", "^")
 K = "△△"
 I = "△(△△)(△△)"
 D = "△(△△)(△△△)"
+# S = D (K D) (D K (K D)). Each argument needs its own parentheses:
+# plain string concatenation like K + D would NOT mean "K applied to D".
+S = f"{D}({K}({D}))({D}({K})({K}({D})))"
 
 def apply(f, x):
     return f + [x]      # a NEW list, so copies never share state

@@ -2,7 +2,9 @@ import io
 import unittest
 from contextlib import redirect_stdout
 
-from parser import parse, I
+import random
+
+from parser import parse, K, I, D, S
 from reduction_logic import (
     apply, apply_all, show, is_value, K_rule, S_rule, F_rule,
     reduce_root, step, normalize, trace,
@@ -222,6 +224,66 @@ class TestTrace(unittest.TestCase):
     def test_step_limit(self):
         result, _ = self.run_trace(parse(I + "(.)"), max_steps=1)
         self.assertEqual(result[1:], (1, False))
+
+
+# --- The book's equations, checked on concrete example trees ---------------
+
+def random_tree(rng, depth):
+    """A random binary tree (a value) of at most `depth` levels."""
+    if depth == 0 or rng.random() < 0.3:
+        return []
+    return [random_tree(rng, depth - 1) for _ in range(rng.randint(1, 2))]
+
+
+HAND_PICKED = [parse(s) for s in [
+    "△", "△△", "△△△", "△(△△)", "△△(△△)", K, I, D, "△(△△△)(△△)",
+]]
+
+
+def example_trees(n_random=60, seed=0):
+    rng = random.Random(seed)
+    return HAND_PICKED + [random_tree(rng, 4) for _ in range(n_random)]
+
+
+class TestBookEquations(unittest.TestCase):
+    """Both sides of each equation must reduce to the same normal form.
+    Pairs where either side doesn't finish within the step limit are skipped."""
+
+    MAX_STEPS = 2000
+
+    def assert_equation(self, lhs, rhs, n_vars, n_random=60):
+        trees = example_trees(n_random)
+        rng = random.Random(1)
+        checked = 0
+        for _ in range(len(trees) * 2):
+            args = [rng.choice(trees) for _ in range(n_vars)]
+            l, _, done_l = normalize(lhs(*args), self.MAX_STEPS)
+            r, _, done_r = normalize(rhs(*args), self.MAX_STEPS)
+            if not (done_l and done_r):
+                continue
+            checked += 1
+            self.assertEqual(l, r, "failed for " + ", ".join(show(a) for a in args))
+        self.assertGreater(checked, 0)
+
+    def test_I_x_eq_x(self):
+        self.assert_equation(lambda x: apply(parse(I), x),
+                             lambda x: x, 1)
+
+    def test_K_x_y_eq_x(self):
+        self.assert_equation(lambda x, y: apply_all(parse(K), x, y),
+                             lambda x, y: x, 2)
+
+    def test_D_x_y_z_eq_y_z_xz(self):
+        self.assert_equation(lambda x, y, z: apply_all(parse(D), x, y, z),
+                             lambda x, y, z: apply_all(y, z, apply(x, z)), 3)
+
+    def test_S_x_y_z_eq_x_z_yz(self):
+        self.assert_equation(lambda x, y, z: apply_all(parse(S), x, y, z),
+                             lambda x, y, z: apply_all(x, z, apply(y, z)), 3)
+
+    def test_S_K_K_is_identity(self):
+        skk = apply_all(parse(S), parse(K), parse(K))
+        self.assert_equation(lambda x: apply(skk, x), lambda x: x, 1)
 
 
 if __name__ == "__main__":
