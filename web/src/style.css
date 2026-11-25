@@ -1,3 +1,7 @@
+/* Tree Calculus visualizer.
+   Milestone 8 layout: the canvas fills the window; every control floats on
+   top of it in small translucent panels ("hud"). */
+
 :root {
   --bg: #fbfaf7;
   --panel: #ffffff;
@@ -11,9 +15,10 @@
   --halo: rgba(217, 72, 15, 0.18);
   --accent: #5b4bd6;
   --error: #c92a2a;
+  --shadow: 0 4px 18px rgba(20, 18, 30, 0.08);
 
   color-scheme: light dark;
-  font: 16px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   color: var(--text);
   background: var(--bg);
 }
@@ -32,99 +37,33 @@
     --halo: rgba(255, 138, 76, 0.22);
     --accent: #9d91ff;
     --error: #ff6b6b;
+    --shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
   }
 }
 
 * { box-sizing: border-box; }
 
-body {
+html, body {
   margin: 0;
+  height: 100%;
+  overflow: hidden;          /* the canvas is the page: no page scrolling */
   background: var(--bg);
 }
 
-#app {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-height: 100svh;
-}
-
-h1 {
-  font-size: 1.4rem;
-  font-weight: 600;
-  margin: 0 0 8px;
-}
-
-.input-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.input-row span { color: var(--muted); font-size: 0.9rem; }
-
-input, code {
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-}
-
-input {
-  flex: 1;
-  min-width: 0;
-  font-size: 1.1rem;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--text);
-}
-
-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-
-.examples, .controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-button {
-  font: inherit;
-  font-size: 0.9rem;
-  padding: 4px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--text);
-  cursor: pointer;
-}
-
-button:hover:not(:disabled) { border-color: var(--accent); }
-button:disabled { opacity: 0.45; cursor: default; }
-
-.error {
-  color: var(--error);
-  min-height: 1.5em;
-  margin: 4px 0 0;
-  font-size: 0.9rem;
-}
-
-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
+/* --- The canvas ------------------------------------------------------------ */
 
 #canvas {
-  width: 100%;
-  height: min(62vh, 560px);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  display: block;
+  touch-action: none;        /* pointer events drive pan, pinch and dragging */
+  user-select: none;
+  cursor: grab;
 }
+#canvas.panning { cursor: grabbing; }
 
 .links line {
   stroke: var(--link);
@@ -134,163 +73,17 @@ main {
 
 .node .dot { fill: var(--node); }
 .node.computation .dot { fill: var(--computation); }
+
+/* The ring marks the redex ▶| will reduce next. */
 .node .halo {
+  display: none;
   fill: var(--halo);
   stroke: var(--computation);
   stroke-width: 2;
 }
-
-.info code {
-  display: block;
-  padding: 8px 10px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  word-break: break-all;
-  font-size: 1rem;
-}
-
-#status {
-  margin: 8px 0 0;
-  color: var(--muted);
-}
-
-/* --- Milestone 4: dragging and tuning ----------------------------------- */
-
-#canvas {
-  touch-action: none;   /* let pointer events drive dragging on touch screens */
-  user-select: none;
-}
-
-.node { cursor: grab; }
-.node.dragging { cursor: grabbing; }
-.node.dragging .dot { stroke: var(--accent); stroke-width: 3; }
-
-/* The halo exists on every node but only shows on the next redex. */
-.node .halo { display: none; }
 .node.next-redex .halo { display: inline; }
 
-.tuning {
-  margin-top: 12px;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.tuning summary { cursor: pointer; }
-
-#sliders {
-  display: grid;
-  gap: 6px;
-  margin-top: 8px;
-  max-width: 480px;
-}
-
-.slider {
-  display: grid;
-  grid-template-columns: 140px 1fr 44px;
-  align-items: center;
-  gap: 8px;
-}
-
-.slider input { width: 100%; accent-color: var(--accent); }
-.slider output { font-family: ui-monospace, Menlo, monospace; text-align: right; }
-
-/* --- Milestone 5: nodes and links that vanish fade out ------------------- */
-/* --leave-ms is set by scene.ts from LEAVE_MS and the animation speed. */
-
-.node.leaving,
-.links line.leaving {
-  opacity: 0;
-  transition: opacity var(--leave-ms, 350ms) ease-out;
-  pointer-events: none;
-}
-
-.node.leaving .dot {
-  transform: scale(0.3);
-  transform-box: fill-box;
-  transform-origin: center;
-  transition: transform var(--leave-ms, 350ms) ease-in;
-}
-
-/* --- Milestone 6: modes, workspace, joining -------------------------------- */
-
-.input-row label { color: var(--muted); font-size: 0.9rem; }
-
-.examples .label {
-  color: var(--muted);
-  font-size: 0.9rem;
-  align-self: center;
-  margin-right: 2px;
-}
-
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-}
-
-.toolbar .controls { margin-top: 0; }
-
-.modes {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.modes button {
-  border: none;
-  border-radius: 0;
-  padding: 6px 14px;
-}
-
-.modes button + button { border-left: 1px solid var(--border); }
-
-.modes button.active {
-  background: var(--accent);
-  color: #fff;
-}
-
-.mode-help {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.85rem;
-  min-height: 2.6em;
-}
-
-#message {
-  margin: 4px 0 0;
-  min-height: 1.5em;
-  font-size: 0.9rem;
-}
-
-/* Cursors say what a click will do. */
-#canvas[data-mode='add'] .node { cursor: copy; }
-#canvas[data-mode='remove'] .node { cursor: not-allowed; }
-#canvas[data-mode='move'] .node { cursor: grab; }
-#canvas .node.root { cursor: grab; }
-#canvas .node.dragging,
-#canvas.carrying .node { cursor: grabbing; }
-
-/* With several trees, the unselected ones step back a little. */
-.node.dim, .links line.dim { opacity: 0.5; }
-
-/* A node of another tree that a carried tree would be attached to. */
-.node.drop-target .dot {
-  stroke: var(--accent);
-  stroke-width: 4;
-  paint-order: stroke;
-}
-.node.drop-target { opacity: 1; }
-
-/* --- Milestone 7: every redex, badges, playback ---------------------------- */
-
-/* Only the redex ▶| will reduce gets a ring (see .next-redex above); every
-   redex, including that one, is marked by its K/S/F badge. */
-
-/* The K/S/F badge: click it to reduce that redex. */
+/* Every redex has a K/S/F letter: click it to reduce that redex. */
 .node .badge { display: none; cursor: pointer; }
 .node.redex .badge { display: inline; }
 .node .badge text {
@@ -299,38 +92,258 @@ main {
   user-select: none;
 }
 .node .badge:hover text { fill: var(--computation-light); }
+
+/* Cursors say what a click will do. */
+#canvas[data-mode='add'] .node { cursor: copy; }
+#canvas[data-mode='remove'] .node { cursor: not-allowed; }
+#canvas[data-mode='move'] .node { cursor: grab; }
+#canvas .node.root { cursor: grab; }
+#canvas .node .badge { cursor: pointer; }
+#canvas .node.dragging,
+#canvas.carrying .node { cursor: grabbing; }
+
+.node.dragging .dot { stroke: var(--accent); stroke-width: 3; }
+
+/* With several trees, the unselected ones step back a little. */
+.node.dim, .links line.dim { opacity: 0.5; }
+
+/* A node of another tree that a carried tree would be attached to. */
+.node.drop-target { opacity: 1; }
+.node.drop-target .dot {
+  stroke: var(--accent);
+  stroke-width: 4;
+  paint-order: stroke;
+}
+
+/* Nodes and links that vanish fade out. --leave-ms is set by scene.ts. */
+.node.leaving,
+.links line.leaving {
+  opacity: 0;
+  transition: opacity var(--leave-ms, 350ms) ease-out;
+  pointer-events: none;
+}
+.node.leaving .dot {
+  transform: scale(0.3);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform var(--leave-ms, 350ms) ease-in;
+}
 .node.leaving .badge { display: none; }
 
-.playback {
+/* --- Floating panels ------------------------------------------------------- */
+
+/* The top and bottom strips span the window but only their panels take the
+   pointer, so the canvas between them stays draggable. */
+.hud {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  pointer-events: none;
+  z-index: 1;
+}
+.hud.top { top: 12px; align-items: flex-start; flex-wrap: wrap; }
+/* wrap-reverse flips the cross axis, so flex-start here means "the bottom". */
+.hud.bottom { bottom: 12px; align-items: flex-start; flex-wrap: wrap-reverse; }
+.hud > * { pointer-events: auto; }
+
+.panel {
+  background: color-mix(in srgb, var(--panel) 84%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 8px 10px;
+}
+
+h1 {
+  font-size: 0.95rem;
+  font-weight: 650;
+  margin: 0 0 6px;
+}
+
+.top-left { width: min(420px, 100%); }
+.top-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.row, .examples {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 4px;
+}
+.examples { margin-top: 6px; }
+.examples .label { color: var(--muted); font-size: 0.8rem; margin-right: 2px; }
+.sep { width: 1px; height: 18px; background: var(--border); margin: 0 3px; }
+
+input, code { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+
+.input-row { display: flex; gap: 6px; }
+.input-row input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.95rem;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+}
+input:focus-visible, button:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
-.playback #play-btn { min-width: 84px; }
+button {
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.3;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.error {
+  color: var(--error);
+  font-size: 0.8rem;
+  margin: 4px 0 0;
+}
+.error:empty { display: none; }
+
+/* Add / Remove / Move */
+.modes {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.modes button { border: none; border-radius: 0; padding: 4px 12px; }
+.modes button + button { border-left: 1px solid var(--border); }
+.modes button.active { background: var(--accent); color: #fff; }
+
+/* Help popover, under the tools. */
+.help {
+  position: fixed;
+  top: 92px;
+  right: 12px;
+  width: min(360px, calc(100vw - 24px));
+  z-index: 2;
+  font-size: 0.85rem;
+}
+.help p { margin: 0 0 6px; }
+.help p:last-child { margin-bottom: 0; }
+
+/* Bottom left: the selected tree's △ text, one line with an ellipsis; click
+   it to see all of it (the panel grows upwards). Fixed width. */
+.bottom-left {
+  position: relative;
+  flex: 0 0 auto;
+  width: 300px;
+}
+#notation {
+  display: block;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+#notation.expanded {
+  white-space: normal;
+  word-break: break-all;
+  max-height: 40vh;
+  overflow: auto;
+}
+.panel-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-bottom: 2px;
+}
+#notation:empty::before { content: '\00a0'; }   /* keep the panel's height when empty */
+
+/* Bottom centre: playback, centred on the screen (the strip spans the
+   window with equal margins, so its middle is the screen's middle). */
+.playback {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: min(560px, calc(100% - 640px));   /* never under the side panels */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.playback #play-btn { min-width: 74px; }
 .playback #back-btn,
 .playback #fwd-btn { font-family: ui-monospace, Menlo, monospace; letter-spacing: -1px; }
+#scrub { flex: 1 1 120px; min-width: 90px; accent-color: var(--accent); }
+#frame-label { color: var(--muted); font-size: 0.78rem; flex: 1 0 100%; order: 10; }
+#frame-label:empty { display: none; }
+.play-speed { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 0.78rem; }
+.play-speed input { width: 70px; accent-color: var(--accent); }
+.play-speed output { font-family: ui-monospace, Menlo, monospace; min-width: 2em; }
 
-#scrub {
-  flex: 1 1 160px;
-  min-width: 120px;
-  accent-color: var(--accent);
+/* Bottom right: a ⚙ button that stays in place; the tuning sliders pop up
+   above it (outside the strip's layout, so nothing else moves). */
+.bottom-right {
+  position: relative;
+  margin-left: auto;
+  display: flex;
+  justify-content: flex-end;
 }
-
-#frame-label {
+.gear {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 1rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 84%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--shadow);
+}
+.tuning {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  font-size: 0.8rem;
   color: var(--muted);
-  font-size: 0.85rem;
-  min-width: 13em;
 }
-
-.play-speed {
-  display: inline-flex;
+.tuning[hidden] { display: none; }
+#sliders { display: grid; gap: 4px; margin-bottom: 6px; width: min(320px, calc(100vw - 48px)); }
+.slider {
+  display: grid;
+  grid-template-columns: 120px 1fr 40px;
   align-items: center;
   gap: 6px;
-  color: var(--muted);
-  font-size: 0.85rem;
 }
-.play-speed input { width: 90px; accent-color: var(--accent); }
-.play-speed output { font-family: ui-monospace, Menlo, monospace; min-width: 2.2em; }
+.slider input { width: 100%; accent-color: var(--accent); }
+.slider output { font-family: ui-monospace, Menlo, monospace; text-align: right; }
+
+/* Narrow screens: panels take the full width and stack. */
+/* Not enough room to centre it beside the side panels: back into the row. */
+@media (max-width: 1060px) {
+  .playback { position: static; transform: none; width: auto; flex: 1 1 420px; }
+}
+
+@media (max-width: 720px) {
+  .top-left, .bottom-left, .playback { flex-basis: 100%; width: 100%; }
+  .top-right { flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .examples { flex-wrap: nowrap; overflow-x: auto; }
+  .help { top: auto; bottom: 150px; }
+}

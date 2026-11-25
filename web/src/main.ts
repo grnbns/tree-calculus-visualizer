@@ -1,5 +1,5 @@
 import './style.css'
-import { allRedexes, isValue, show, step, type Path } from './engine'
+import { allRedexes, show, step, type Path } from './engine'
 import { parse, K, I, D, S } from './parser'
 import { Scene, DEFAULT_PARAMS, type PhysicsParams } from './scene'
 import { idSource } from './ids'
@@ -26,65 +26,84 @@ const EXAMPLES: [label: string, text: string][] = [
 type Mode = 'add' | 'remove' | 'move'
 
 const MODE_HELP: Record<Mode, string> = {
-  add: 'Click a node to give it a new leaf branch (that applies it to △). Shift-click removes a branch instead.',
-  remove: 'Click a node to remove it and everything under it; click a root to remove the whole tree. Shift-click adds a leaf instead.',
-  move: 'Drag any node to tear it off into a tree of its own. Click a tree to select it.',
+  add: 'Add branch (A): click a node to give it a new leaf branch, which applies it to △. Shift-click removes instead.',
+  remove: 'Remove (R): click a node to remove it and everything under it; click a root to remove the whole tree. Shift-click adds instead.',
+  move: 'Move (M): drag any node to tear it off into a tree of its own. Click a tree to select it.',
 }
-const ALWAYS_HELP = 'In every mode: drag a tree by its root onto a node of another tree to join them (that node is applied to the tree).'
 
+// Everything floats over a full-window canvas (milestone 8).
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header>
+  <svg id="canvas" role="img" aria-label="Tree drawing: drag empty space to pan, ctrl or ⌘ + scroll or pinch to zoom"></svg>
+
+  <div class="hud top">
+  <section class="panel top-left" aria-label="Trees">
     <h1>Tree Calculus</h1>
     <div class="input-row">
-      <label for="tree-input">Tree</label>
-      <input id="tree-input" spellcheck="false" autocomplete="off"
-             placeholder="e.g. △(△△)(△△△) or S K K △   ( . and ^ also work )" />
-      <button id="new-btn" type="button" title="Add the typed tree as a new tree">New tree</button>
+      <input id="tree-input" spellcheck="false" autocomplete="off" aria-label="Tree in △ notation"
+             placeholder="△(△△)(△△△) or S K K △" />
+      <button id="new-btn" type="button" title="Add the typed tree as a new tree">New</button>
     </div>
-    <div class="examples" id="examples"><span class="label">Add:</span></div>
+    <div class="examples" id="examples"><span class="label">Add</span></div>
     <p class="error" id="error" role="alert"></p>
-  </header>
-  <main>
-    <div class="toolbar">
-      <div class="modes" role="radiogroup" aria-label="Click mode">
-        <button type="button" role="radio" data-mode="add" title="Add branches (A)">Add branch</button>
-        <button type="button" role="radio" data-mode="remove" title="Remove branches (R)">Remove</button>
-        <button type="button" role="radio" data-mode="move" title="Tear off and move (M)">Move</button>
-      </div>
-      <div class="controls">
-        <button id="undo-btn" type="button" title="Undo (Ctrl+Z)">Undo</button>
-        <button id="redo-btn" type="button" title="Redo (Ctrl+Shift+Z)">Redo</button>
-        <button id="clear-btn" type="button">Clear all</button>
+  </section>
+
+  <section class="panel top-right" aria-label="Tools">
+    <div class="modes" role="radiogroup" aria-label="Click mode">
+      <button type="button" role="radio" data-mode="add">Add</button>
+      <button type="button" role="radio" data-mode="remove">Remove</button>
+      <button type="button" role="radio" data-mode="move">Move</button>
+    </div>
+    <div class="row">
+      <button id="undo-btn" type="button" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
+      <button id="redo-btn" type="button" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">↷</button>
+      <button id="clear-btn" type="button" title="Remove every tree">Clear</button>
+      <span class="sep"></span>
+      <button id="zoom-out-btn" type="button" title="Zoom out (−)" aria-label="Zoom out">−</button>
+      <button id="zoom-in-btn" type="button" title="Zoom in (+)" aria-label="Zoom in">+</button>
+      <button id="fit-btn" type="button" title="Fit all trees (F)">Fit</button>
+      <button id="help-btn" type="button" title="Help (?)" aria-label="Help" aria-expanded="false">?</button>
+    </div>
+  </section>
+  </div>
+
+  <section class="panel help" id="help" hidden aria-label="Help">
+    <p><b>Add</b> (A): click a node to give it a leaf branch, which applies it to △. <b>Remove</b> (R): click to remove a branch, or a root to remove its tree. Shift-click swaps the two. <b>Move</b> (M): drag any node to tear it off.</p>
+    <p>In every mode, drag a tree by its <b>root</b> onto a node of another tree to join them (that node is applied to it). The first click on a dimmed tree selects it.</p>
+    <p><b>Reduce:</b> ▶| steps (→), |◀ steps back (←), Space plays and pauses. Click a K/S/F letter to reduce that redex instead.</p>
+    <p><b>View:</b> drag empty space or scroll to pan; ctrl/⌘ + scroll or pinch to zoom; F fits everything.</p>
+  </section>
+
+  <div class="hud bottom">
+  <section class="panel bottom-left" aria-label="Current tree">
+    <span class="panel-label">Current tree</span>
+    <code id="notation" title="Click to show all"></code>
+  </section>
+
+  <section class="panel bottom-center playback" aria-label="Reduction playback">
+    <button id="back-btn" type="button" title="Step back (←)" aria-label="Step back">|◀</button>
+    <button id="play-btn" type="button" title="Play (Space)">▶ Play</button>
+    <button id="fwd-btn" type="button" title="Step forward (→)" aria-label="Step forward">▶|</button>
+    <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Reduction steps" />
+    <span id="frame-label"></span>
+    <label class="play-speed" title="Steps per second while playing">
+      <span>Speed</span>
+      <input id="play-speed" type="range" min="0.25" max="4" step="0.25" value="1" />
+      <output id="play-speed-out">1</output>
+    </label>
+  </section>
+
+  <section class="bottom-right">
+    <div class="panel tuning" id="tuning" hidden aria-label="Physics tuning">
+      <div id="sliders"></div>
+      <div class="row">
+        <button id="defaults-btn" type="button">Defaults</button>
+        <button id="copy-btn" type="button">Copy values</button>
       </div>
     </div>
-    <p class="mode-help" id="mode-help"></p>
-    <svg id="canvas" role="img" aria-label="Tree drawing"></svg>
-    <div class="info">
-      <code id="notation"></code>
-      <p id="status"></p>
-      <p id="message" aria-live="polite"></p>
-      <div class="playback" role="group" aria-label="Reduction playback">
-        <button id="back-btn" type="button" title="Step back (←)" aria-label="Step back">|◀</button>
-        <button id="play-btn" type="button" title="Play (Space)">▶ Play</button>
-        <button id="fwd-btn" type="button" title="Step forward (→)" aria-label="Step forward">▶|</button>
-        <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Reduction steps" />
-        <span id="frame-label"></span>
-        <label class="play-speed" title="Steps per second while playing">
-          <span>Play speed</span>
-          <input id="play-speed" type="range" min="0.25" max="4" step="0.25" value="1" />
-          <output id="play-speed-out">1</output>
-        </label>
-      </div>
-      <details class="tuning">
-        <summary>Physics tuning</summary>
-        <div id="sliders"></div>
-        <div class="controls">
-          <button id="defaults-btn" type="button">Defaults</button>
-          <button id="copy-btn" type="button">Copy values</button>
-        </div>
-      </details>
-    </div>
-  </main>
+    <button id="gear-btn" class="gear" type="button" title="Physics tuning" aria-label="Physics tuning"
+            aria-expanded="false" aria-controls="tuning">⚙</button>
+  </section>
+  </div>
 `
 
 const $ = <T extends Element>(sel: string) => document.querySelector<T>(sel)!
@@ -92,9 +111,6 @@ const input = $<HTMLInputElement>('#tree-input')
 const errorBox = $<HTMLParagraphElement>('#error')
 const svg = $<SVGSVGElement>('#canvas')
 const notation = $<HTMLElement>('#notation')
-const status = $<HTMLParagraphElement>('#status')
-const messageBox = $<HTMLParagraphElement>('#message')
-const modeHelp = $<HTMLParagraphElement>('#mode-help')
 const backBtn = $<HTMLButtonElement>('#back-btn')
 const playBtn = $<HTMLButtonElement>('#play-btn')
 const fwdBtn = $<HTMLButtonElement>('#fwd-btn')
@@ -104,6 +120,8 @@ const playSpeed = $<HTMLInputElement>('#play-speed')
 const undoBtn = $<HTMLButtonElement>('#undo-btn')
 const redoBtn = $<HTMLButtonElement>('#redo-btn')
 const clearBtn = $<HTMLButtonElement>('#clear-btn')
+const helpBtn = $<HTMLButtonElement>('#help-btn')
+const helpPanel = $<HTMLElement>('#help')
 const examples = $<HTMLDivElement>('#examples')
 const sliders = $<HTMLDivElement>('#sliders')
 
@@ -140,31 +158,28 @@ function commit(change: Change, opts: { typing?: boolean; sameAction?: boolean }
   lastTypedKey = opts.typing ? change.ws.selected : null
   ws = change.ws
   render(change.born)
-  messageBox.textContent = change.message ?? ''
 }
 
+// Trees on screen at the last render: new ones get brought into view.
+let shownKeys = new Set<string>()
+
 function render(born?: ReadonlyMap<string, string>): void {
+  // The camera never jumps. It only glides to reveal trees that just appeared
+  // (added, torn off, brought back by undo) and, while playing, the tree being
+  // played as it grows; and only if they'd otherwise be off screen.
+  const keys = ws.trees.map((t) => t.key)
+  const reveal = keys.filter((k) => !shownKeys.has(k))
+  if (playing && ws.selected) reveal.push(ws.selected)
+  shownKeys = new Set(keys)
   scene.setWorkspace(
     ws.trees.map((t) => ({ ...t, nextRedex: step(t.tree)?.path ?? null, redexes: allRedexes(t.tree) })),
-    { selected: ws.selected, born },
+    { selected: ws.selected, born, reveal },
   )
   const sel = getTree(ws, ws.selected)
   if (!sel) {
     notation.textContent = ''
-    status.textContent = 'The workspace is empty: type a tree above or click one of the examples.'
   } else {
     notation.textContent = show(sel.tree)
-    const next = step(sel.tree)
-    let text: string
-    if (next === null) {
-      text = isValue(sel.tree) ? 'a value, nothing left to reduce.' : 'no rule applies.'
-    } else {
-      const where = next.path.length ? `at [${next.path.join(', ')}]` : 'at the root'
-      const count = allRedexes(sel.tree).length
-      text = `a computation; ▶| reduces the ${next.rule} rule ${where} (strong ring)` +
-        (count > 1 ? `, or click any of the ${count} K/S/F badges to reduce that one instead.` : '.')
-    }
-    status.textContent = ws.trees.length > 1 ? `Selected tree: ${text}` : text[0].toUpperCase() + text.slice(1)
     // Keep the input box showing the selected tree, unless you're typing in it.
     if (document.activeElement !== input) {
       input.value = show(sel.tree)
@@ -184,7 +199,6 @@ function undo(): void {
   redoStack.push(ws)
   ws = prev
   lastTypedKey = null
-  messageBox.textContent = ''
   render()
 }
 
@@ -195,7 +209,6 @@ function redo(): void {
   undoStack.push(ws)
   ws = next
   lastTypedKey = null
-  messageBox.textContent = ''
   render()
 }
 
@@ -232,13 +245,11 @@ function ensureRun(): Run | null {
 function applyMove(r: Moved | Stopped | null): boolean {
   if (r === null) return false
   if ('stopped' in r) {
-    messageBox.textContent = r.message
     renderPlayback()
     return false
   }
   run = r.run
   ws = currentWs(run)
-  messageBox.textContent = ''
   render(r.born)
   return true
 }
@@ -328,12 +339,39 @@ function setMode(m: Mode): void {
     b.setAttribute('aria-checked', String(on))
   }
   svg.dataset.mode = m
-  modeHelp.textContent = `${MODE_HELP[m]} ${ALWAYS_HELP}`
+  svg.setAttribute('aria-description', MODE_HELP[m])
 }
 
 for (const b of document.querySelectorAll<HTMLButtonElement>('.modes button')) {
+  b.title = MODE_HELP[b.dataset.mode as Mode]
   b.addEventListener('click', () => setMode(b.dataset.mode as Mode))
 }
+
+// --- View: zoom, fit, help, long notation ------------------------------------------
+
+$<HTMLButtonElement>('#zoom-in-btn').addEventListener('click', () => scene.zoomBy(1.25))
+$<HTMLButtonElement>('#zoom-out-btn').addEventListener('click', () => scene.zoomBy(0.8))
+$<HTMLButtonElement>('#fit-btn').addEventListener('click', () => scene.fitAll())
+
+function toggleHelp(show = helpPanel.hidden !== false): void {
+  helpPanel.hidden = !show
+  helpBtn.setAttribute('aria-expanded', String(show))
+  helpBtn.classList.toggle('active', show)
+}
+helpBtn.addEventListener('click', () => toggleHelp())
+
+// The ⚙ button stays put; the tuning sliders pop up above it.
+const gearBtn = $<HTMLButtonElement>('#gear-btn')
+const tuningPanel = $<HTMLElement>('#tuning')
+function toggleTuning(show = tuningPanel.hidden !== false): void {
+  tuningPanel.hidden = !show
+  gearBtn.setAttribute('aria-expanded', String(show))
+  gearBtn.classList.toggle('active', show)
+}
+gearBtn.addEventListener('click', () => toggleTuning())
+
+// Long △ text is cut to one line; click it to see all of it.
+notation.addEventListener('click', () => notation.classList.toggle('expanded'))
 
 // --- What clicks and drags on the canvas mean ------------------------------------
 
@@ -342,7 +380,6 @@ function select(treeKey: string): void {
   if (ws.selected === treeKey) return
   endRun()
   ws = selectTree(ws, treeKey)
-  messageBox.textContent = ''
   render()
 }
 
@@ -457,6 +494,17 @@ document.addEventListener('keydown', (e) => {
   } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y' && !typing) {
     e.preventDefault()
     redo()
+  } else if (!typing && plain && (e.key === 'f' || e.key === 'F')) {
+    scene.fitAll()
+  } else if (!typing && plain && (e.key === '+' || e.key === '=')) {
+    scene.zoomBy(1.25)
+  } else if (!typing && plain && (e.key === '-' || e.key === '_')) {
+    scene.zoomBy(0.8)
+  } else if (!typing && plain && e.key === '?') {
+    toggleHelp()
+  } else if (e.key === 'Escape') {
+    toggleHelp(false)
+    toggleTuning(false)
   } else if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
     const m = ({ a: 'add', r: 'remove', m: 'move' } as const)[e.key.toLowerCase() as 'a' | 'r' | 'm']
     if (m) setMode(m)

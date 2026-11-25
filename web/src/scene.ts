@@ -1,4 +1,4 @@
-// The live, physical drawing of the workspace's trees (milestones 4–6).
+// The live, physical drawing of the workspace's trees (milestones 4–8).
 //
 // Every node is a body in a d3-force simulation:
 //   - links are springs whose rest length matches the tidy layout
@@ -14,6 +14,12 @@
 // copied from (or their parent); nodes that vanish fade out. The simulation
 // cools down and stops once everything settles.
 //
+// The camera (camera.ts) is the SVG viewBox. It never moves by itself except
+// to fit everything on first show, to bring trees into view when asked
+// (`reveal`), or on "fit all"; and then it glides. You pan by dragging empty
+// canvas or scrolling, and zoom with ctrl/⌘ + scroll, a trackpad pinch or
+// two fingers.
+//
 // The scene doesn't change any trees itself. It reports clicks, drag starts
 // and drops (with the node or tree they're over) to main.ts, which decides
 // what they mean and calls setWorkspace() with the result.
@@ -25,6 +31,10 @@ import {
 } from 'd3-force'
 import type { Path, Redex, Tree } from './engine'
 import type { IdTree } from './ids'
+import {
+  fitBounds, lerpCamera, panBy, reveal, unionBounds, viewBox, zoomAt,
+  type Bounds, type Camera, type Point, type Size,
+} from './camera'
 import {
   COMPUTATION_RADIUS, HALO_RADIUS, NODE_RADIUS,
   layoutTree, samePath, type NodeKind,
@@ -66,12 +76,10 @@ const CLICK_SLOP = 4
 // While carrying a tree, a node of another tree this close (SVG units) is the drop target.
 const DROP_RADIUS = 24
 // Where a redex's K/S/F badge sits: up and to the right of the node.
-const BADGE_OFFSET = 16
+const BADGE_OFFSET = 15
 
-// Smallest area the view will zoom to, so a single leaf isn't drawn huge.
-const MIN_VIEW_W = 360
-const MIN_VIEW_H = 240
-const PADDING = 28
+// How long the camera takes to glide somewhere (ms).
+const GLIDE_MS = 450
 
 // --- Simulation data ---------------------------------------------------------
 
@@ -234,6 +242,16 @@ export class Scene {
   private dropTarget: SimNode | null = null
   private warnedAboutOrder = false
 
+  // The camera, and the canvas size in screen pixels.
+  private camera: Camera = { x: 0, y: 0, zoom: 1 }
+  private cameraReady = false      // fitted to the trees yet?
+  private size: Size = { width: 1, height: 1 }
+  private glide: { from: Camera; to: Camera; start: number; frame: number } | null = null
+  /** Pointers panning (one) or pinch-zooming (two) on empty canvas: last client position. */
+  private panPointers = new Map<number, Point>()
+  /** World-space bounds of each tree's tidy layout, from the last setWorkspace. */
+  private treeBounds = new Map<string, Bounds>()
+
   // Our own animation loop (instead of d3's), so the speed can be changed.
   private frame: number | null = null
   private tickBudget = 0
@@ -262,6 +280,9 @@ export class Scene {
 
     this.setParams(this.params)
     this.listenForPointer()
+    this.listenForPanZoom()
+    this.updateSize()
+    new ResizeObserver(() => this.updateSize()).observe(svg)
   }
 
   getParams(): PhysicsParams {
@@ -324,27 +345,93 @@ export class Scene {
 
   // --- Showing the workspace ----------------------------------------------------
 
+  // --- Camera ----------------------------------------------------------------
+
+  private updateSize(): void {
+    this.size = { width: Math.max(this.svg.clientWidth, 1), height: Math.max(this.svg.clientHeight, 1) }
+    this.applyCamera()
+  }
+
+  private applyCamera(): void {
+    this.svg.setAttribute('viewBox', viewBox(this.camera, this.size).map((v) => v.toFixed(2)).join(' '))
+  }
+
+  private setCamera(c: Camera): void {
+    this.camera = c
+    this.applyCamera()
+  }
+
+  private stopGlide(): void {
+    if (this.glide) cancelAnimationFrame(this.glide.frame)
+    this.glide = null
+  }
+
+  /** Move the camera to `to` smoothly (ease-out). */
+  private glideTo(to: Camera): void {
+    this.stopGlide()
+    if (reducedMotion()) {
+      this.setCamera(to)
+      return
+    }
+    const from = this.camera
+    const start = performance.now()
+    const tick = (now: number) => {
+      const t = Math.min((now - start) / GLIDE_MS, 1)
+      const eased = 1 - Math.pow(1 - t, 3)
+      this.setCamera(lerpCamera(from, to, eased))
+      if (t < 1 && this.glide) this.glide.frame = requestAnimationFrame(tick)
+      else this.glide = null
+    }
+    this.glide = { from, to, start, frame: requestAnimationFrame(tick) }
+  }
+
+  /** Glide so every tree is on screen. */
+  fitAll(): void {
+    const b = unionBounds([...this.treeBounds.values()])
+    if (b) this.glideTo(fitBounds(b, this.size))
+  }
+
+  /** Zoom in (factor > 1) or out around the middle of the canvas, smoothly. */
+  zoomBy(factor: number): void {
+    const target = this.glide?.to ?? this.camera
+    this.glideTo(zoomAt(target, this.size, { x: this.size.width / 2, y: this.size.height / 2 }, factor))
+  }
+
+  /** Glide just enough to bring these trees into view (nothing if they are). */
+  revealTrees(keys: readonly string[]): void {
+    const b = unionBounds(keys.flatMap((k) => this.treeBounds.get(k) ?? []))
+    if (!b) return
+    const from = this.glide?.to ?? this.camera
+    const to = reveal(from, this.size, b)
+    if (to !== from) this.glideTo(to)
+  }
+
   /** Show these trees. Nodes whose id was already on screen keep their
    *  position and glide to their new target (even into another tree). New
    *  nodes sprout from the node they were copied from (`born`: new id ->
    *  origin id), or else from their parent. Nodes whose id is gone fade out. */
   setWorkspace(
     trees: readonly SceneTree[],
-    options: { selected?: string | null; born?: ReadonlyMap<string, string> } = {},
+    options: {
+      selected?: string | null
+      born?: ReadonlyMap<string, string>
+      /** trees to bring into view if they aren't (the camera glides) */
+      reveal?: readonly string[]
+    } = {},
   ): void {
     const born = options.born ?? new Map<string, string>()
     const dim = trees.length > 1
     const old = this.nodes
     const next = new Map<string, SimNode>()
     const sproutedFromOrigin = new Set<string>()
-    const bounds = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
+    this.treeBounds = new Map()
 
     for (const t of trees) {
       const layout = layoutTree(t.tree)
-      bounds.minX = Math.min(bounds.minX, layout.bounds.minX + t.x)
-      bounds.maxX = Math.max(bounds.maxX, layout.bounds.maxX + t.x)
-      bounds.minY = Math.min(bounds.minY, layout.bounds.minY + t.y)
-      bounds.maxY = Math.max(bounds.maxY, layout.bounds.maxY + t.y)
+      this.treeBounds.set(t.key, {
+        minX: layout.bounds.minX + t.x, maxX: layout.bounds.maxX + t.x,
+        minY: layout.bounds.minY + t.y, maxY: layout.bounds.maxY + t.y,
+      })
 
       // The id of every node of this tree, looked up by its path.
       const idByPath = new Map<string, string>()
@@ -458,8 +545,15 @@ export class Scene {
     }
     this.links = nextLinks
 
-    // Don't move the camera while something is being dragged.
-    if (!this.dragging) this.fitView(trees.length ? bounds : { minX: 0, maxX: 0, minY: 0, maxY: 0 })
+    // The camera stays where it is, except: fit everything the first time
+    // there's something to show, and glide to reveal trees when asked (never
+    // while something is being dragged).
+    if (!this.cameraReady && trees.length) {
+      this.cameraReady = true
+      this.setCamera(fitBounds(unionBounds([...this.treeBounds.values()])!, this.size))
+    } else if (options.reveal?.length && !this.dragging) {
+      this.revealTrees(options.reveal)
+    }
 
     // Links first, then nodes: sim.nodes() re-initialises every force
     // (including the links) with the new node list.
@@ -506,15 +600,6 @@ export class Scene {
         c[i].x = x
       }
     }
-  }
-
-  /** Fit the view to the tidy layout. Done only when the trees change, never
-   *  per tick, so the camera stays still while nodes move. */
-  private fitView(b: { minX: number; maxX: number; minY: number; maxY: number }): void {
-    const w = Math.max(b.maxX - b.minX + 2 * PADDING, MIN_VIEW_W)
-    const h = Math.max(b.maxY - b.minY + 2 * PADDING, MIN_VIEW_H)
-    const cx = (b.minX + b.maxX) / 2
-    this.svg.setAttribute('viewBox', `${cx - w / 2} ${b.minY - PADDING} ${w} ${h}`)
   }
 
   /** Draw every node `t` of the way (0–1) from its previous position to its
@@ -617,6 +702,66 @@ export class Scene {
     this.setDropTarget(null)
     this.dragging = null
     this.sim.alphaTarget(0)  // cool down and come to rest
+  }
+
+  /** Pan by dragging empty canvas (pinch with two fingers); scroll to pan;
+   *  ctrl/⌘ + scroll (which is also what a trackpad pinch sends) to zoom. */
+  private listenForPanZoom(): void {
+    const local = (e: { clientX: number; clientY: number }): Point => {
+      const r = this.svg.getBoundingClientRect()
+      return { x: e.clientX - r.left, y: e.clientY - r.top }
+    }
+
+    this.svg.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 && e.button !== 1) return
+      if ((e.target as Element).closest('g.node')) return   // that's a node press
+      e.preventDefault()
+      this.stopGlide()
+      this.panPointers.set(e.pointerId, local(e))
+      this.svg.setPointerCapture(e.pointerId)
+      this.svg.classList.add('panning')
+    })
+
+    this.svg.addEventListener('pointermove', (e) => {
+      const last = this.panPointers.get(e.pointerId)
+      if (!last) return
+      const now = local(e)
+      if (this.panPointers.size === 1) {
+        this.setCamera(panBy(this.camera, now.x - last.x, now.y - last.y))
+      } else {
+        // Two fingers: pan with their midpoint, zoom with their spread.
+        const other = [...this.panPointers].find(([id]) => id !== e.pointerId)![1]
+        const mid0 = { x: (last.x + other.x) / 2, y: (last.y + other.y) / 2 }
+        const mid1 = { x: (now.x + other.x) / 2, y: (now.y + other.y) / 2 }
+        const spread0 = Math.hypot(last.x - other.x, last.y - other.y)
+        const spread1 = Math.hypot(now.x - other.x, now.y - other.y)
+        let cam = panBy(this.camera, mid1.x - mid0.x, mid1.y - mid0.y)
+        if (spread0 > 0) cam = zoomAt(cam, this.size, mid1, spread1 / spread0)
+        this.setCamera(cam)
+      }
+      this.panPointers.set(e.pointerId, now)
+    })
+
+    const release = (e: PointerEvent) => {
+      if (!this.panPointers.delete(e.pointerId)) return
+      if (this.panPointers.size === 0) this.svg.classList.remove('panning')
+    }
+    this.svg.addEventListener('pointerup', release)
+    this.svg.addEventListener('pointercancel', release)
+
+    this.svg.addEventListener('wheel', (e) => {
+      e.preventDefault()
+      this.stopGlide()
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.size.height : 1   // lines / pages -> pixels
+      if (e.ctrlKey || e.metaKey) {
+        // Trackpad pinches send small deltas; a mouse wheel notch sends ~100.
+        // Cap each event so one notch zooms by at most ~28%.
+        const delta = Math.max(-25, Math.min(25, e.deltaY * unit))
+        this.setCamera(zoomAt(this.camera, this.size, local(e), Math.exp(-delta * 0.01)))
+      } else {
+        this.setCamera(panBy(this.camera, -e.deltaX * unit, -e.deltaY * unit))
+      }
+    }, { passive: false })
   }
 
   private listenForPointer(): void {
