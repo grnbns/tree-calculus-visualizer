@@ -87,15 +87,16 @@ def reduce_root(tree):
 def step(tree):
     """Do one reduction step anywhere in `tree`: try the root first, then each
     branch from left to right (leftmost-outermost order).
-    Return (new_tree, rule_name), or None if no rule applies anywhere."""
+    Return (new_tree, rule_name, path), or None if no rule applies anywhere."""
     at_root = reduce_root(tree)
     if at_root is not None:
-        return at_root
+        new_tree, rule = at_root
+        return new_tree, rule, []
     for i, child in enumerate(tree):
         inner = step(child)
         if inner is not None:
-            new_child, rule = inner
-            return tree[:i] + [new_child] + tree[i + 1:], rule
+            new_child, rule, path = inner
+            return tree[:i] + [new_child] + tree[i + 1:], rule, [i] + path
     return None
 
 
@@ -110,12 +111,13 @@ def normalize(tree, max_steps=1000):
             return tree, steps, True
         if steps >= max_steps:
             return tree, steps, False
-        tree, _ = result
+        tree, _, _ = result
         steps += 1
 
 
 def trace(tree, max_steps=1000):
-    """Like `normalize`, but print each step: the rule used and the tree after it."""
+    """Like `normalize`, but print each step: the rule used, the path to the
+    redex it reduced, and the tree after it."""
     print(f"start: {show(tree)}")
     steps = 0
     while True:
@@ -126,6 +128,6 @@ def trace(tree, max_steps=1000):
         if steps >= max_steps:
             print(f"gave up after {steps} steps")
             return tree, steps, False
-        tree, rule = result
+        tree, rule, path = result
         steps += 1
-        print(f"{steps:>4}. {rule}: {show(tree)}")
+        print(f"{steps:>4}. {rule} at {str(path):<8} {show(tree)}")

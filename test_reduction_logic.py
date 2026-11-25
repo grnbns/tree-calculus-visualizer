@@ -139,27 +139,56 @@ class TestStep(unittest.TestCase):
         self.assertIsNone(step(parse(I)))
 
     def test_root_step(self):
-        self.assertEqual(step([[], [[]], []]), ([[]], "K"))
+        self.assertEqual(step([[], [[]], []]), ([[]], "K", []))
 
     def test_step_inside_branch(self):
         # stem whose child is a K redex
-        self.assertEqual(step([[[], [], []]]), ([[]], "K"))
+        self.assertEqual(step([[[], [], []]]), ([[]], "K", [0]))
+
+    def test_path_two_levels_deep(self):
+        # root fork: branch 1 is a fork whose branch 1 is an S redex
+        s_redex = [[[]], [], []]
+        result = step([[], [[], s_redex]])
+        assert result is not None
+        _, rule, path = result
+        self.assertEqual(rule, "S")
+        self.assertEqual(path, [1, 1])
+
+    def test_path_points_at_the_redex(self):
+        # following the path in the OLD tree must land on a reducible node
+        tree = [[], [[], [[], [[[]], [], []]]]]
+        result = step(tree)
+        assert result is not None
+        _, _, path = result
+        node = tree
+        for i in path:
+            node = node[i]
+        self.assertIsNotNone(reduce_root(node))
+
+    def test_paths_do_not_share_state(self):
+        r1 = step([[[], [], []]])
+        r2 = step([[[], [], []]])
+        assert r1 is not None and r2 is not None
+        r1[2].append(99)
+        self.assertEqual(r2[2], [0])
 
     def test_leftmost_first(self):
         k_redex = [[], [[]], []]       # -> [[]]
         s_redex = [[[]], [], []]       # S redex
         result = step([k_redex, s_redex])
         assert result is not None
-        new, rule = result
+        new, rule, path = result
         self.assertEqual(rule, "K")
+        self.assertEqual(path, [0])
         self.assertEqual(new, [[[]], s_redex])
 
     def test_first_branch_redex_reduced_before_root(self):
         inner = [[], [[]], []]         # K redex -> [[]]
         result = step([inner, [], []])
         assert result is not None
-        new, rule = result
+        new, rule, path = result
         self.assertEqual(rule, "K")
+        self.assertEqual(path, [0])
         self.assertEqual(new, [[[]], [], []])
 
     def test_does_not_mutate_input(self):
@@ -295,6 +324,19 @@ class TestBookEquations(unittest.TestCase):
     def test_S_K_K_is_identity(self):
         skk = apply_all(parse(S), parse(K), parse(K))
         self.assert_equation(lambda x: apply(skk, x), lambda x: x, 1)
+
+
+class TestCasesFileUpToDate(unittest.TestCase):
+    """tests/cases.json is the answer key for the TypeScript port.
+    If the engine changes, regenerate it with: python export_cases.py"""
+
+    def test_cases_json_matches_engine(self):
+        import json
+        from export_cases import OUT_PATH, build_cases
+        with open(OUT_PATH, encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk, build_cases(),
+                         "tests/cases.json is stale: run python export_cases.py")
 
 
 if __name__ == "__main__":
