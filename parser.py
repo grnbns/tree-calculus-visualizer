@@ -1,16 +1,19 @@
-K = ".."
-I = ".(..)(..)"
-D = ".(..)(...)"
+LEAF = "△"          # canonical leaf symbol; "." and "^" are accepted as aliases
+ALIASES = (".", "^")
+
+K = "△△"
+I = "△(△△)(△△)"
+D = "△(△△)(△△△)"
 
 def apply(f, x):
     return f + [x]      # a NEW list, so copies never share state
 
 def parse_atom(s, i):
-    """Read ONE argument starting at s[i]: a '.' or a '( ... )' group.
+    """Read ONE argument starting at s[i]: a '△' or a '( ... )' group.
     Return (tree, index just after it)."""
     if i >= len(s):
         raise ValueError("unexpected end of input")
-    if s[i] == ".":
+    if s[i] == LEAF:
         return [], i + 1
     if s[i] == "(":
         inner, i = parse_seq(s, i + 1)
@@ -29,6 +32,8 @@ def parse_seq(s, i):
 
 def parse(s):
     s = s.replace(" ", "")
+    for alias in ALIASES:
+        s = s.replace(alias, LEAF)
     tree, i = parse_seq(s, 0)
     if i != len(s):
         raise ValueError(f"unexpected {s[i]!r} at {i}")

@@ -5,9 +5,12 @@
 #   3 or more branches = a computation that needs reducing.
 #
 # Rules, chosen by the shape of the first branch:
-#   K:  ..yz      = y
-#   S:  .(.x)yz   = yz(xz)
-#   F:  .(.wx)yz  = zwx
+#   K:  △△yz      = y
+#   S:  △(△x)yz   = yz(xz)
+#   F:  △(△wx)yz  = zwx
+
+
+LEAF = '△'
 
 
 def apply(function, argument):
@@ -26,9 +29,9 @@ def apply_all(function, *arguments):
 
 
 def show(tree):
-    """Return the dot-notation string for `tree`, e.g. [[[]], [[]]] -> '.(..)(..)'.
+    """Return the string for `tree` using △ for each node, e.g. [[[]], [[]]] -> '△(△△)(△△)'.
     A branch that has branches of its own is wrapped in parentheses."""
-    result = '.'
+    result = LEAF
     for child in tree:
         if child == []:
             result += show(child)
@@ -43,14 +46,14 @@ def is_value(tree):
 
 
 def K_rule(redex):
-    """`redex` has 3+ branches and its first branch is a leaf: ..yz = y.
+    """`redex` has 3+ branches and its first branch is a leaf: △△yz = y.
     Return the result, with any branches after z applied to it unchanged."""
     y, z, rest = redex[1], redex[2], redex[3:]
     return apply_all(y, *rest)
 
 
 def S_rule(redex):
-    """`redex` has 3+ branches and its first branch is a stem .x: .(.x)yz = yz(xz).
+    """`redex` has 3+ branches and its first branch is a stem △x: △(△x)yz = yz(xz).
     Return the result, with any branches after z applied to it unchanged."""
     x, y, z, rest = redex[0][0], redex[1], redex[2], redex[3:]
     result = apply(apply(y,z), apply(x,z))
@@ -58,7 +61,7 @@ def S_rule(redex):
 
 
 def F_rule(redex):
-    """`redex` has 3+ branches and its first branch is a fork .wx: .(.wx)yz = zwx.
+    """`redex` has 3+ branches and its first branch is a fork △wx: △(△wx)yz = zwx.
     Return the result, with any branches after z applied to it unchanged."""
     w, x, z, rest = redex[0][0], redex[0][1], redex[2], redex[3:]
     return apply_all(z, w, x, *rest)
@@ -126,7 +129,3 @@ def trace(tree, max_steps=1000):
         tree, rule = result
         steps += 1
         print(f"{steps:>4}. {rule}: {show(tree)}")
-
-
-if __name__ == "__main__":
-    print(show([[[]], [[]]]))
