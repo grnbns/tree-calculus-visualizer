@@ -2,6 +2,7 @@ import './style.css'
 import { isValue, show, step, type Tree } from './engine'
 import { parse, K, I, D, S } from './parser'
 import { Scene, DEFAULT_PARAMS, type PhysicsParams } from './scene'
+import { freshIds, stepIds, type IdTree } from './ids'
 
 const EXAMPLES: [label: string, text: string][] = [
   ['K', K],
@@ -57,13 +58,20 @@ const sliders = document.querySelector<HTMLDivElement>('#sliders')!
 
 const scene = new Scene(svg)
 
-let parsed: Tree = []   // what the input box says
-let current: Tree = []  // what's on screen (after any Steps)
+// Every state since the tree was typed in: history[0] is the input, the last
+// entry is what's on screen. Each state carries its node ids (see ids.ts), so
+// nodes keep their identity across steps and Reset can animate back.
+type State = { tree: Tree; ids: IdTree; born?: ReadonlyMap<string, string> }
+let history: State[] = [{ tree: [], ids: freshIds([]) }]
+let current: Tree = []
 let stepsTaken = 0
 
 function render(): void {
+  const state = history[history.length - 1]
+  current = state.tree
+  stepsTaken = history.length - 1
   const next = step(current)
-  scene.setTree(current, next?.path ?? null)
+  scene.setTree(current, state.ids, { nextRedex: next?.path ?? null, born: state.born })
   notation.textContent = show(current)
 
   if (next === null) {
@@ -79,15 +87,15 @@ function render(): void {
 }
 
 function loadFromInput(): void {
+  let tree: Tree
   try {
-    parsed = parse(input.value.trim() || '△')
+    tree = parse(input.value.trim() || '△')
   } catch (e) {
     errorBox.textContent = (e as Error).message
     return // keep showing the last good tree
   }
   errorBox.textContent = ''
-  current = parsed
-  stepsTaken = 0
+  history = [{ tree, ids: freshIds(tree) }]   // a new tree: all-new nodes
   render()
 }
 
@@ -96,14 +104,14 @@ input.addEventListener('input', loadFromInput)
 stepBtn.addEventListener('click', () => {
   const next = step(current)
   if (next === null) return
-  current = next.tree
-  stepsTaken++
+  const { ids, born } = stepIds(history[history.length - 1].ids, next)
+  history.push({ tree: next.tree, ids, born })
   render()
 })
 
 resetBtn.addEventListener('click', () => {
-  current = parsed
-  stepsTaken = 0
+  // Back to the input tree with its ORIGINAL ids: surviving nodes glide back.
+  history = [{ tree: history[0].tree, ids: history[0].ids }]
   render()
 })
 
@@ -129,6 +137,7 @@ const SLIDERS: { key: keyof PhysicsParams; label: string; min: number; max: numb
   { key: 'repulsion', label: 'Repulsion', min: 0, max: 150, step: 5 },
   { key: 'orderStrength', label: 'Keep branch order', min: 0, max: 1, step: 0.05 },
   { key: 'damping', label: 'Damping', min: 0.05, max: 0.9, step: 0.05 },
+  { key: 'speed', label: 'Animation speed', min: 0.1, max: 2, step: 0.05 },
 ]
 
 const sliderInputs = new Map<keyof PhysicsParams, HTMLInputElement>()

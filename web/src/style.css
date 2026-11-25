@@ -192,3 +192,20 @@ main {
 
 .slider input { width: 100%; accent-color: var(--accent); }
 .slider output { font-family: ui-monospace, Menlo, monospace; text-align: right; }
+
+/* --- Milestone 5: nodes and links that vanish fade out ------------------- */
+/* --leave-ms is set by scene.ts from LEAVE_MS and the animation speed. */
+
+.node.leaving,
+.links line.leaving {
+  opacity: 0;
+  transition: opacity var(--leave-ms, 350ms) ease-out;
+  pointer-events: none;
+}
+
+.node.leaving .dot {
+  transform: scale(0.3);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform var(--leave-ms, 350ms) ease-in;
+}

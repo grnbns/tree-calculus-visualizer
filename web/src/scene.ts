@@ -1,4 +1,4 @@
-// The live, physical drawing of a tree (milestone 4).
+// The live, physical drawing of a tree (milestones 4 and 5).
 //
 // Every node is a body in a d3-force simulation:
 //   - links are springs whose rest length matches the tidy layout
@@ -7,10 +7,11 @@
 //     which is what keeps the tree readable
 //   - a sibling-order force stops branches from ever swapping sides
 //
-// The Scene lives as long as the page. setTree() swaps in a new tree while
-// keeping the nodes that survive (matched by path for now; milestone 5 will
-// replace that with real node identity), so they move instead of redrawing.
-// The simulation cools down and stops once everything has settled.
+// The Scene lives as long as the page. setTree() swaps in a new tree together
+// with its ids (see ids.ts). Nodes are matched by id, so a node that survives a
+// reduction step keeps its position and travels to its new place; new nodes
+// sprout from the node they were copied from (or their parent); nodes that
+// vanish fade out. The simulation cools down and stops once everything settles.
 
 import {
   forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY,
@@ -18,6 +19,7 @@ import {
   type Simulation, type SimulationLinkDatum, type SimulationNodeDatum,
 } from 'd3-force'
 import type { Path, Tree } from './engine'
+import type { IdTree } from './ids'
 import {
   COMPUTATION_RADIUS, HALO_RADIUS, NODE_RADIUS,
   layoutTree, samePath, type NodeKind,
@@ -32,6 +34,7 @@ export type PhysicsParams = {
   repulsion: number      // how hard nearby nodes push apart
   orderStrength: number  // how hard swapped siblings are pushed back (0–1)
   damping: number        // velocity lost per tick (0–1); higher = less bouncy
+  speed: number          // animation speed: physics ticks per frame (1 = d3's normal pace)
 }
 
 export const DEFAULT_PARAMS: PhysicsParams = {
@@ -40,14 +43,18 @@ export const DEFAULT_PARAMS: PhysicsParams = {
   pullY: 0.5,
   repulsion: 30,
   orderStrength: 0.6,
-  damping: 0.35,
+  damping: 0.7,
+  speed: 0.5,
 }
 
 // Nodes closer than this are pushed apart; also the minimum sibling gap.
 const COLLIDE_RADIUS = NODE_RADIUS + 3
 const MIN_SIBLING_GAP = 2 * NODE_RADIUS + 4
-// Siblings are never allowed closer than this, even mid-drag.
+// Siblings are never allowed closer than this while one of them is dragged.
 const HARD_SIBLING_GAP = 2
+// How long vanishing nodes take to fade out at speed 1 (slower speeds fade
+// proportionally slower). style.css reads the actual value from --leave-ms.
+const LEAVE_MS = 350
 
 // Smallest area the view will zoom to, so a single leaf isn't drawn huge.
 const MIN_VIEW_W = 360
@@ -57,6 +64,9 @@ const PADDING = 28
 // --- Simulation data ---------------------------------------------------------
 
 export type SimNode = SimulationNodeDatum & {
+  /** Position before the latest physics tick, for drawing in between ticks. */
+  prevX?: number
+  prevY?: number
   id: string
   path: Path
   kind: NodeKind
@@ -101,11 +111,15 @@ export function forceSiblingOrder(minGap = MIN_SIBLING_GAP) {
         }
       }
     }
-    // Hard rule on top of the soft push above: siblings may never cross, even
-    // when one is dragged quickly past the other. If they would, move the free
-    // one directly. Sweep both ways so a whole row of siblings gets shoved.
+    // Hard rule on top of the soft push above, for rows where a node is being
+    // dragged: siblings may never cross, even when one is dragged quickly past
+    // the other. If they would, move the free one directly. Sweep both ways so
+    // a whole row of siblings gets shoved.
+    // (Not applied otherwise: after a reduction step, subtrees really are
+    // travelling to new places, and shoving them would make them teleport.)
     for (const parent of nodes) {
       const c = parent.children
+      if (!c.some((n) => n.fx != null)) continue
       for (let i = 1; i < c.length; i++) keepApart(c[i - 1], c[i], 'right')
       for (let i = c.length - 1; i >= 1; i--) keepApart(c[i - 1], c[i], 'left')
     }
@@ -173,6 +187,10 @@ export class Scene {
   private dragging: { node: SimNode; pointerId: number } | null = null
   private warnedAboutOrder = false
 
+  // Our own animation loop (instead of d3's), so the speed can be changed.
+  private frame: number | null = null
+  private tickBudget = 0
+
   constructor(svg: SVGSVGElement) {
     this.svg = svg
     svg.replaceChildren(this.linkLayer, this.nodeLayer)
@@ -193,7 +211,7 @@ export class Scene {
       .force('pullX', this.pullX)
       .force('pullY', this.pullY)
       .force('order', this.order)
-      .on('tick', () => this.renderFrame())
+      .stop()   // d3 would run its own timer; we drive ticks from loop() instead
 
     this.setParams(this.params)
     this.listenForDrags()
@@ -212,24 +230,94 @@ export class Scene {
     this.pullY.strength(q.pullY)
     this.order.strength(q.orderStrength)
     this.sim.velocityDecay(q.damping)
-    this.sim.alpha(Math.max(this.sim.alpha(), 0.3)).restart()
+    this.svg.style.setProperty('--leave-ms', `${Math.round(this.leaveMs())}ms`)
+    this.sim.alpha(Math.max(this.sim.alpha(), 0.3))
+    this.wake()
   }
 
-  /** Show `tree`. Nodes that existed before (same path) keep their position
-   *  and glide to their new target; new nodes sprout from their parent. */
-  setTree(tree: Tree, nextRedex: Path | null = null): void {
+  /** Fade-out time at the current speed. */
+  private leaveMs(): number {
+    return LEAVE_MS / Math.max(this.params.speed, 0.05)
+  }
+
+  // --- Animation loop ---------------------------------------------------------
+  //
+  // Each screen frame we add `speed` to a budget and run one physics tick per
+  // whole unit, so speed 0.5 = a tick every other frame, speed 2 = two per
+  // frame. Between ticks, nodes are drawn part-way from their previous to their
+  // current position, so slow motion stays smooth. Dragging always runs at
+  // full speed so the node keeps up with the pointer.
+
+  private wake(): void {
+    if (this.frame === null && !reducedMotion()) {
+      this.frame = requestAnimationFrame(() => this.loop())
+    }
+  }
+
+  private loop(): void {
+    this.frame = null
+    this.tickBudget += this.dragging ? 1 : this.params.speed
+    while (this.tickBudget >= 1) {
+      for (const n of this.nodes.values()) { n.prevX = n.x; n.prevY = n.y }
+      this.sim.tick()
+      this.tickBudget -= 1
+    }
+    const stillMoving = this.dragging !== null || this.sim.alpha() >= this.sim.alphaMin()
+    // Draw the in-between position; once at rest, draw exactly where nodes are.
+    this.renderFrame(stillMoving ? this.tickBudget : 1)
+    if (stillMoving) this.wake()
+    else this.tickBudget = 0
+  }
+
+  /** Show `tree`, whose node ids are given by `ids` (same shape as `tree`).
+   *  Nodes whose id was already on screen keep their position and glide to
+   *  their new target. New nodes sprout from the node they were copied from
+   *  (`born`: new id -> origin id), or else from their parent. Nodes whose id
+   *  is gone fade out. */
+  setTree(
+    tree: Tree,
+    ids: IdTree,
+    options: { nextRedex?: Path | null; born?: ReadonlyMap<string, string> } = {},
+  ): void {
+    const nextRedex = options.nextRedex ?? null
+    const born = options.born ?? new Map<string, string>()
     const layout = layoutTree(tree)
+
+    // The id of every node, looked up by its path.
+    const idByPath = new Map<string, string>()
+    const walk = (t: IdTree, path: Path) => {
+      idByPath.set(pathId(path), t.id)
+      t.children.forEach((c, i) => walk(c, [...path, i]))
+    }
+    walk(ids, [])
+
+    const old = this.nodes
     const next = new Map<string, SimNode>()
+    const byPath = new Map<string, SimNode>()
+    const sproutedFromOrigin = new Set<string>()
 
     // layout.nodes lists parents before children, and children in branch order.
     for (const ln of layout.nodes) {
-      const id = pathId(ln.path)
-      const parent = ln.path.length ? next.get(pathId(ln.path.slice(0, -1)))! : null
-      let n = this.nodes.get(id)
+      const id = idByPath.get(pathId(ln.path))
+      if (id === undefined) throw new Error(`no id for node at [${ln.path.join(', ')}]: ids and tree differ in shape`)
+      const parent = ln.path.length ? byPath.get(pathId(ln.path.slice(0, -1)))! : null
+      let n = old.get(id)
       if (!n) {
-        // Sprout: start just below the parent, already in the right order.
-        const fromX = parent ? parent.x! + (ln.x - parent.targetX) * 0.2 : ln.x
-        const fromY = parent ? parent.y! + 4 : ln.y
+        const origin = old.get(born.get(id) ?? '')
+        let fromX: number, fromY: number
+        if (origin) {
+          // A copy (S rule): sprout out of the node it was copied from.
+          fromX = origin.x! + 3
+          fromY = origin.y! + 3
+          sproutedFromOrigin.add(id)
+        } else if (parent) {
+          // Otherwise start just below the parent, already in the right order.
+          fromX = parent.x! + (ln.x - parent.targetX) * 0.2
+          fromY = parent.y! + 4
+        } else {
+          fromX = ln.x
+          fromY = ln.y
+        }
         n = { id, path: ln.path, kind: ln.kind, targetX: ln.x, targetY: ln.y, children: [], x: fromX, y: fromY, vx: 0, vy: 0 }
         const g = svgEl('g', { class: 'node' })
         g.dataset.id = id
@@ -244,27 +332,33 @@ export class Scene {
       n.children = []
       parent?.children.push(n)
       next.set(id, n)
+      byPath.set(pathId(ln.path), n)
 
       const g = this.nodeEls.get(id)!
       const isNext = nextRedex !== null && samePath(ln.path, nextRedex)
-      g.setAttribute('class', `node ${ln.kind}${isNext ? ' next-redex' : ''}`)
+      const dragging = this.dragging?.node.id === id ? ' dragging' : ''
+      g.setAttribute('class', `node ${ln.kind}${isNext ? ' next-redex' : ''}${dragging}`)
       g.querySelector('.dot')!.setAttribute('r', String(ln.kind === 'computation' ? COMPUTATION_RADIUS : NODE_RADIUS))
       g.querySelector('title')!.textContent =
         ln.path.length ? `${ln.kind} at [${ln.path.join(', ')}]` : `${ln.kind} (root)`
     }
 
-    this.placeNewNodesInOrder(next, new Set(this.nodes.keys()))
+    this.placeNewNodesInOrder(next, (id) => old.has(id) || sproutedFromOrigin.has(id))
 
-    // Remove nodes that are gone.
-    for (const id of this.nodes.keys()) {
+    // Nodes that are gone: out of the simulation now, off the screen after a fade.
+    for (const id of old.keys()) {
       if (next.has(id)) continue
-      this.nodeEls.get(id)!.remove()
+      this.fadeOut(this.nodeEls.get(id)!)
       this.nodeEls.delete(id)
-      if (this.dragging?.node.id === id) this.dragging = null
+      if (this.dragging?.node.id === id) {
+        this.dragging = null
+        this.sim.alphaTarget(0)
+      }
     }
     this.nodes = next
 
-    // Links: one per non-root node, named after its child end.
+    // Links: one per non-root node, named after its child end. A link keeps
+    // its line when its child survives, even if the child has a new parent.
     const nextLinks = new Map<string, SimLink>()
     for (const n of next.values()) {
       for (const child of n.children) {
@@ -282,7 +376,7 @@ export class Scene {
     }
     for (const id of this.links.keys()) {
       if (nextLinks.has(id)) continue
-      this.linkEls.get(id)!.remove()
+      this.fadeOut(this.linkEls.get(id)!)
       this.linkEls.delete(id)
     }
     this.links = nextLinks
@@ -297,23 +391,34 @@ export class Scene {
 
     if (reducedMotion()) {
       for (const n of next.values()) { n.x = n.targetX; n.y = n.targetY; n.vx = n.vy = 0 }
-      this.sim.alpha(0).stop()
-      this.renderFrame()
+      this.sim.alpha(0)
+      this.renderFrame(1)
     } else {
-      this.sim.alpha(Math.max(this.sim.alpha(), 0.7)).restart()
+      this.sim.alpha(Math.max(this.sim.alpha(), 0.7))
+      this.wake()
     }
+  }
+
+  /** Fade an element out where it stands, then remove it. */
+  private fadeOut(el: SVGElement): void {
+    if (reducedMotion()) {
+      el.remove()
+      return
+    }
+    el.classList.add('leaving')
+    setTimeout(() => el.remove(), this.leaveMs())
   }
 
   /** A node that sprouts next to siblings that already exist (and may still
    *  be sitting in their old positions) must start between them, or it would
    *  begin on the wrong side and visibly swap. */
-  private placeNewNodesInOrder(nodes: Map<string, SimNode>, existed: Set<string>): void {
+  private placeNewNodesInOrder(nodes: Map<string, SimNode>, isPlaced: (id: string) => boolean): void {
     for (const parent of nodes.values()) {
       const c = parent.children
       for (let i = 0; i < c.length; i++) {
-        if (existed.has(c[i].id)) continue
+        if (isPlaced(c[i].id)) continue
         const left = i > 0 ? c[i - 1].x! : null           // already placed
-        const rightNode = c.slice(i + 1).find((s) => existed.has(s.id))
+        const rightNode = c.slice(i + 1).find((s) => isPlaced(s.id))
         const right = rightNode ? rightNode.x! : null
         let x = c[i].x!
         if (left !== null && right !== null) x = (left + right) / 2
@@ -333,20 +438,26 @@ export class Scene {
     this.svg.setAttribute('viewBox', `${cx - w / 2} ${b.minY - PADDING} ${w} ${h}`)
   }
 
-  private renderFrame(): void {
+  /** Draw every node `t` of the way (0–1) from its previous position to its
+   *  current one. */
+  private renderFrame(t: number): void {
+    const drawX = (n: SimNode) => (n.prevX ?? n.x!) + (n.x! - (n.prevX ?? n.x!)) * t
+    const drawY = (n: SimNode) => (n.prevY ?? n.y!) + (n.y! - (n.prevY ?? n.y!)) * t
     for (const n of this.nodes.values()) {
-      this.nodeEls.get(n.id)!.setAttribute('transform', `translate(${n.x!.toFixed(2)},${n.y!.toFixed(2)})`)
+      this.nodeEls.get(n.id)!.setAttribute('transform', `translate(${drawX(n).toFixed(2)},${drawY(n).toFixed(2)})`)
     }
     for (const l of this.links.values()) {
       const line = this.linkEls.get(l.id)!
-      line.setAttribute('x1', l.source.x!.toFixed(2))
-      line.setAttribute('y1', l.source.y!.toFixed(2))
-      line.setAttribute('x2', l.target.x!.toFixed(2))
-      line.setAttribute('y2', l.target.y!.toFixed(2))
+      line.setAttribute('x1', drawX(l.source).toFixed(2))
+      line.setAttribute('y1', drawY(l.source).toFixed(2))
+      line.setAttribute('x2', drawX(l.target).toFixed(2))
+      line.setAttribute('y2', drawY(l.target).toFixed(2))
     }
 
-    // Development check: branches must never swap sides.
-    if (import.meta.env.DEV) {
+    // Development check: branches must never swap sides at rest or while
+    // dragging. (During the first moments after a reduction step, subtrees
+    // are still travelling to their new places, so that's not checked.)
+    if (import.meta.env.DEV && (this.dragging !== null || this.sim.alpha() < 0.05)) {
       const bad = countOrderViolations(this.nodes.values())
       this.svg.dataset.orderViolations = String(bad)
       if (bad > 0 && !this.warnedAboutOrder) {
@@ -377,7 +488,8 @@ export class Scene {
       const p = this.toSvgPoint(e)
       node.fx = p.x
       node.fy = p.y
-      this.sim.alphaTarget(0.3).restart()
+      this.sim.alphaTarget(0.3)
+      this.wake()
     })
 
     this.svg.addEventListener('pointermove', (e) => {

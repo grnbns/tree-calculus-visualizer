@@ -6,21 +6,42 @@ This plan is deliberately high-level. Each milestone has a goal, a finish line, 
 
 ---
 
-## Where things stand (Nov 2026)
+## Where things stand (25 Nov 2026)
 
-`reduction_logic.py` is done and correct. It was checked against:
+**Milestones 0–5 are done.** Next up: Milestone 6.
 
-- the book's equations `I x = x`, `K x y = x`, `D x y z = y z (x z)`, and `S x y z = x z (y z)` using S from eq. (3.1);
-- an independent evaluator (innermost-first) on thousands of random trees.
+| Milestone | Status |
+|---|---|
+| 0. Tidy up the Python reference | ✅ Done |
+| 1. Scaffold the web app | ✅ Done |
+| 2. Port the engine to TypeScript | ✅ Done |
+| 3. Draw a tree, no motion yet | ✅ Done |
+| 4. Make it fluid | ✅ Done |
+| 5. Stable node identity | ✅ Done |
+| 6. Build and join trees | ⏭️ Next |
+| 7–9 | Not started |
 
-Out of 14,988 checks there were 0 mismatches. Cases that never finish were skipped.
+What exists now:
+
+- **`reduction_logic.py`**: the reference engine. `step` returns `(new_tree, rule, path)`, where `path` is the list of branch indices from the root to the redex (`[]` = root). `trace` prints the rule and path for each step.
+- **`parser.py`**: parses △ notation (`.` and `^` accepted as aliases). Named trees `K`, `I`, `D`, `S`, with `S = D (K D) (D K (K D))`.
+- **`test_reduction_logic.py`**: 50 tests, run with `pytest` from the `.venv`. Covers every function, paths, and the book's equations `I x = x`, `K x y = x`, `D x y z = y z (x z)`, `S x y z = x z (y z)` and `S K K x = x` on hand-picked and random trees.
+- **`export_cases.py` → `tests/cases.json`**: 67 reference cases (values, each rule, book equations, nested/side-by-side redexes, one non-terminating case, 50 seeded random trees). Each records every step as `{rule, path, tree}` plus the final result. A test fails if the file is out of date.
+- **`demo.py`**: runs `trace`/`normalize`/`step` on examples so you can watch reductions.
+- **`.gitignore`** and a project **`.venv`** with pytest.
+- **`web/`**: Vite + TypeScript (vanilla) app with Vitest. Vite's demo files removed. Run everything from inside `web/`: `npm run dev` (dev server), `npm test` (Vitest, watch mode), `npm run build` (type-check + production build).
+- **`web/src/engine.ts`, `web/src/parser.ts`**: the TypeScript port. Same functions in camelCase (`applyAll`, `isValue`, `kRule`, `reduceRoot`, …). `step` returns `{tree, rule, path}` or `null`; `normalize` returns `{tree, steps, finished}`; `reductionSteps` returns every step (what the visualizer will play through). Trees are `readonly`, so mutation is a type error.
+- **`web/src/render.ts`**: `layoutTree(tree)` (pure: d3-hierarchy positions, node kind, path per node) plus the spacing/size constants (`NODE_GAP_X`, `LEVEL_GAP_Y`, `NODE_RADIUS`, `COMPUTATION_RADIUS`, `HALO_RADIUS`).
+- **`web/src/scene.ts`**: the live drawing. A `Scene` owns a d3-force simulation: springs with tidy-layout rest lengths, light repulsion, collision, pull toward tidy targets, and a custom sibling-order force (soft push always; a hard no-crossing rule in rows where a node is being dragged) so branches never swap sides at rest or while dragging. Drag a node and it springs back; the simulation settles to a stop. `setTree(tree, ids, {nextRedex, born})` matches nodes **by id**: survivors travel to their new place, copies sprout from the node they were copied from, vanished nodes and links fade out (350 ms). The simulation is driven by the scene's own frame loop (not d3's timer) so it has an **animation speed** (physics ticks per frame, default 0.5; positions are interpolated between ticks so slow motion stays smooth; dragging always runs at full speed; fades scale with it). Physics defaults are `DEFAULT_PARAMS` (damping 0.7, speed 0.5); a "Physics tuning" panel on the page has sliders and a "Copy values" button. In dev, an order check warns in the console if siblings are ever out of order at rest or while dragging.
+- **`web/src/ids.ts`**: stable node identity, kept **beside** the tree (the engine stays pure). An `IdTree` has the same shape as the `Tree`. `freshIds(tree)` for a new tree; `stepIds(ids, step)` returns the new ids plus `born` (copy → origin) and `died`. In a redex `△ b0 y z rest`: **K** → y's node becomes the result (z, R, b0 vanish); **S** → y's node becomes the result, x and the original z keep their ids, the second z is a fresh copy; **F** → z's node becomes the result (y, R, b0 vanish).
+- **`web/src/main.ts`**: keeps a history of `{tree, ids, born}` states (Step pushes, Reset returns to the original ids so nodes glide back), input box (live parse, errors shown without losing the drawing), example buttons, △ text, status line, Step/Reset, and `?t=<tree>` in the URL to start from a given tree.
+- **`web/src/*.test.ts`**: 317 Vitest tests, including every case in `tests/cases.json` (same steps, same paths, same order, same result as Python), and id bookkeeping on every step of every case.
 
 Things to know before building on it:
 
 - **Recursion depth.** `show`, `is_value` and `step` hit Python's recursion limit at depth ~1000, e.g. a chain of 3000 stems. That's fine for learning, but keep it in mind; the JavaScript version will have a similar limit.
-- **`step` only reports *which* rule fired, not *where*.** The visualizer needs the location of the redex (a path: the list of branch indices from the root) to highlight and animate it.
 - **Rule set.** These are the book's rules. treecalcul.us uses a different variant (stem: `xz(yz)`, and a fork rule that looks at the shape of z), so its examples won't work here.
-- `__pycache__/` should go in a `.gitignore`.
+- **Building named trees from strings.** `K + D` as strings is *not* "K applied to D"; each argument needs its own parentheses (`K + "(" + D + ")"`). Same trap in TypeScript.
 
 ---
 
@@ -44,17 +65,18 @@ The Python code stays in the repo as the **reference implementation**: it genera
 
 ## Milestones
 
-### 0. Tidy up the Python reference
-- Add `.gitignore` and a few `pytest` tests (I, K, D, S from the book).
-- Make `step` also return the **path** to the redex it reduced.
-- Write a small script that exports test cases to `tests/cases.json`: input tree, expected normal form, and the list of (rule, path) steps.
+### 0. Tidy up the Python reference ✅
+- [x] Add `.gitignore` and a few `pytest` tests (I, K, D, S from the book).
+- [x] Make `step` also return the **path** to the redex it reduced.
+- [x] Write a small script that exports test cases to `tests/cases.json`: input tree, expected normal form, and the list of (rule, path) steps.
 
 **Done when:** `pytest` passes and `cases.json` exists.
-**Think about:** what's the simplest JSON form for a tree? (Your lists already are JSON.)
+**Answer:** trees are stored as the same nested lists, which are already JSON.
 
-### 1. Scaffold the web app
-- Create the Vite + TypeScript project in a `web/` folder (keeps the Python separate).
-- Add Vitest.
+### 1. Scaffold the web app ✅
+- [x] Create the Vite + TypeScript project in a `web/` folder (keeps the Python separate).
+- [x] Add Vitest.
+- [x] Remove Vite's demo files (counter, logos, demo stylesheet).
 
 **Done when:** `npm run dev` shows a blank page and `npm test` runs.
 
@@ -82,17 +104,17 @@ The Python code stays in the repo as the **reference implementation**: it genera
 **Done when:** the tree floats gently, can be dragged, and branches never swap sides.
 **Think about:** how strong should the pull to the target be compared to the springs? Expose a slider while tuning.
 
-### 5. Stable node identity (the key to smooth motion)
+### 5. Stable node identity (the key to smooth motion) ✅
 For anything to *move* rather than *redraw*, each node needs an id that survives from one tree to the next, so d3 knows "this circle moved there".
-- Give every node an id when it's created.
-- When a rule fires, decide where each node in the result came from:
+- [x] Give every node an id when it's created.
+- [x] When a rule fires, decide where each node in the result came from:
   - **K** `△△yz = y`: y's nodes keep their ids; z and the leaf vanish (fade/shrink out).
   - **S** `△(△x)yz = yz(xz)`: z appears **twice**. One copy can keep z's ids; the other copy needs new ids. Let it sprout from where z was.
   - **F** `△(△wx)yz = zwx`: w, x and z keep their ids and move to their new places; y vanishes.
-- Nodes that are new start at their "origin" position; nodes that vanish animate out.
+- [x] Nodes that are new start at their "origin" position; nodes that vanish animate out.
 
 **Done when:** stepping through `I x` shows x visibly travelling, not the screen redrawing.
-**Think about:** whether ids live inside the tree data or in a separate structure alongside it. Both work; one keeps the engine pure.
+**Answer:** ids live in a separate `IdTree` beside the tree (`ids.ts`), so the engine and `cases.json` didn't change. The result of a rule takes over the id of y (K, S) or z (F), so that subtree visibly rises into the redex's place. The hard no-crossing rule now only applies while dragging; after a step, subtrees are travelling and shoving them would make them teleport.
 
 ### 6. Build and join trees
 - **Click a node → add a leaf branch.** Note this means applying that subtree to `△`, so it can create a redex. That's a feature, and worth explaining to learners.
