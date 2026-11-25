@@ -1,3 +1,194 @@
+:root {
+  --bg: #fbfaf7;
+  --panel: #ffffff;
+  --text: #1d1b22;
+  --muted: #6b6672;
+  --border: #e3e0da;
+  --link: #a8a3ad;
+  --node: #2d2a33;
+  --computation: #d9480f;
+  --halo: rgba(217, 72, 15, 0.18);
+  --accent: #5b4bd6;
+  --error: #c92a2a;
+
+  color-scheme: light dark;
+  font: 16px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15141a;
+    --panel: #1d1c23;
+    --text: #ecebf0;
+    --muted: #9b97a3;
+    --border: #2e2c36;
+    --link: #5d5966;
+    --node: #e6e4ea;
+    --computation: #ff8a4c;
+    --halo: rgba(255, 138, 76, 0.22);
+    --accent: #9d91ff;
+    --error: #ff6b6b;
+  }
+}
+
+* { box-sizing: border-box; }
+
 body {
   margin: 0;
+  background: var(--bg);
 }
+
+#app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100svh;
+}
+
+h1 {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.input-row span { color: var(--muted); font-size: 0.9rem; }
+
+input, code {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+input {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.1rem;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.examples, .controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+button {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: default; }
+
+.error {
+  color: var(--error);
+  min-height: 1.5em;
+  margin: 4px 0 0;
+  font-size: 0.9rem;
+}
+
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#canvas {
+  width: 100%;
+  height: min(62vh, 560px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.links line {
+  stroke: var(--link);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.node .dot { fill: var(--node); }
+.node.computation .dot { fill: var(--computation); }
+.node .halo {
+  fill: var(--halo);
+  stroke: var(--computation);
+  stroke-width: 2;
+}
+
+.info code {
+  display: block;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  word-break: break-all;
+  font-size: 1rem;
+}
+
+#status {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+/* --- Milestone 4: dragging and tuning ----------------------------------- */
+
+#canvas {
+  touch-action: none;   /* let pointer events drive dragging on touch screens */
+  user-select: none;
+}
+
+.node { cursor: grab; }
+.node.dragging { cursor: grabbing; }
+.node.dragging .dot { stroke: var(--accent); stroke-width: 3; }
+
+/* The halo exists on every node but only shows on the next redex. */
+.node .halo { display: none; }
+.node.next-redex .halo { display: inline; }
+
+.tuning {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.tuning summary { cursor: pointer; }
+
+#sliders {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 480px;
+}
+
+.slider {
+  display: grid;
+  grid-template-columns: 140px 1fr 44px;
+  align-items: center;
+  gap: 8px;
+}
+
+.slider input { width: 100%; accent-color: var(--accent); }
+.slider output { font-family: ui-monospace, Menlo, monospace; text-align: right; }
