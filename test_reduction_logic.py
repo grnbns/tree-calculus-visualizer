@@ -115,12 +115,19 @@ class TestReduceRoot(unittest.TestCase):
             self.assertIsNone(reduce_root(t))
 
     def test_dispatch(self):
-        self.assertEqual(reduce_root([[], [[]], []])[1], "K")
-        self.assertEqual(reduce_root([[[]], [], []])[1], "S")
-        self.assertEqual(reduce_root([[[], []], [], []])[1], "F")
+        for tree, expected_rule in [
+            ([[], [[]], []], "K"),
+            ([[[]], [], []], "S"),
+            ([[[], []], [], []], "F"),
+        ]:
+            result = reduce_root(tree)
+            assert result is not None
+            self.assertEqual(result[1], expected_rule)
 
     def test_result_values(self):
-        self.assertEqual(reduce_root([[], [[]], []])[0], [[]])
+        result = reduce_root([[], [[]], []])
+        assert result is not None
+        self.assertEqual(result[0], [[]])
 
     def test_first_branch_is_redex(self):
         self.assertIsNone(reduce_root([[[], [], []], [], []]))
@@ -141,13 +148,17 @@ class TestStep(unittest.TestCase):
     def test_leftmost_first(self):
         k_redex = [[], [[]], []]       # -> [[]]
         s_redex = [[[]], [], []]       # S redex
-        new, rule = step([k_redex, s_redex])
+        result = step([k_redex, s_redex])
+        assert result is not None
+        new, rule = result
         self.assertEqual(rule, "K")
         self.assertEqual(new, [[[]], s_redex])
 
     def test_first_branch_redex_reduced_before_root(self):
         inner = [[], [[]], []]         # K redex -> [[]]
-        new, rule = step([inner, [], []])
+        result = step([inner, [], []])
+        assert result is not None
+        new, rule = result
         self.assertEqual(rule, "K")
         self.assertEqual(new, [[[]], [], []])
 
