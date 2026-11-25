@@ -7,6 +7,7 @@
   --link: #a8a3ad;
   --node: #2d2a33;
   --computation: #d9480f;
+  --computation-light: #f78c4f;
   --halo: rgba(217, 72, 15, 0.18);
   --accent: #5b4bd6;
   --error: #c92a2a;
@@ -27,6 +28,7 @@
     --link: #5d5966;
     --node: #e6e4ea;
     --computation: #ff8a4c;
+    --computation-light: #ffc29e;
     --halo: rgba(255, 138, 76, 0.22);
     --accent: #9d91ff;
     --error: #ff6b6b;
@@ -282,3 +284,53 @@ main {
   paint-order: stroke;
 }
 .node.drop-target { opacity: 1; }
+
+/* --- Milestone 7: every redex, badges, playback ---------------------------- */
+
+/* Only the redex ▶| will reduce gets a ring (see .next-redex above); every
+   redex, including that one, is marked by its K/S/F badge. */
+
+/* The K/S/F badge: click it to reduce that redex. */
+.node .badge { display: none; cursor: pointer; }
+.node.redex .badge { display: inline; }
+.node .badge text {
+  fill: var(--computation);
+  font: 700 9px ui-monospace, Menlo, monospace;
+  user-select: none;
+}
+.node .badge:hover text { fill: var(--computation-light); }
+.node.leaving .badge { display: none; }
+
+.playback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.playback #play-btn { min-width: 84px; }
+.playback #back-btn,
+.playback #fwd-btn { font-family: ui-monospace, Menlo, monospace; letter-spacing: -1px; }
+
+#scrub {
+  flex: 1 1 160px;
+  min-width: 120px;
+  accent-color: var(--accent);
+}
+
+#frame-label {
+  color: var(--muted);
+  font-size: 0.85rem;
+  min-width: 13em;
+}
+
+.play-speed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.play-speed input { width: 90px; accent-color: var(--accent); }
+.play-speed output { font-family: ui-monospace, Menlo, monospace; min-width: 2.2em; }

@@ -23,7 +23,7 @@ import {
   type ForceLink, type ForceManyBody, type ForceX, type ForceY,
   type Simulation, type SimulationLinkDatum, type SimulationNodeDatum,
 } from 'd3-force'
-import type { Path, Tree } from './engine'
+import type { Path, Redex, Tree } from './engine'
 import type { IdTree } from './ids'
 import {
   COMPUTATION_RADIUS, HALO_RADIUS, NODE_RADIUS,
@@ -65,6 +65,8 @@ const LEAVE_MS = 350
 const CLICK_SLOP = 4
 // While carrying a tree, a node of another tree this close (SVG units) is the drop target.
 const DROP_RADIUS = 24
+// Where a redex's K/S/F badge sits: up and to the right of the node.
+const BADGE_OFFSET = 16
 
 // Smallest area the view will zoom to, so a single leaf isn't drawn huge.
 const MIN_VIEW_W = 360
@@ -184,7 +186,8 @@ export type SceneTree = {
   ids: IdTree
   x: number              // where its root sits
   y: number
-  nextRedex: Path | null // ringed
+  nextRedex: Path | null // strongly ringed: what Step will reduce
+  redexes?: readonly Redex[] // every redex: a clickable K/S/F badge
 }
 
 export type NodeHit = { treeKey: string; path: Path; shiftKey: boolean }
@@ -192,6 +195,8 @@ export type NodeHit = { treeKey: string; path: Path; shiftKey: boolean }
 export type SceneEvents = {
   /** A press and release without moving: a click on a node. */
   onClick?: (hit: NodeHit) => void
+  /** A click on a redex's K/S/F badge: reduce that redex. */
+  onRedexClick?: (redex: { treeKey: string; path: Path }) => void
   /** A node started being dragged; (x, y) is where it is. The handler may
    *  change the workspace (e.g. tear the node off into its own tree). */
   onDragStart?: (hit: NodeHit & { x: number; y: number }) => void
@@ -275,6 +280,12 @@ export class Scene {
     this.svg.style.setProperty('--leave-ms', `${Math.round(this.leaveMs())}ms`)
     this.sim.alpha(Math.max(this.sim.alpha(), 0.3))
     this.wake()
+  }
+
+  /** True when nothing is being dragged and motion has mostly died down
+   *  (`threshold` is the simulation's "heat", 0–1; lower = calmer). */
+  isSettled(threshold = 0.3): boolean {
+    return this.dragging === null && this.sim.alpha() < threshold
   }
 
   /** Fade-out time at the current speed. */
@@ -372,7 +383,9 @@ export class Scene {
           n = { id, treeKey: t.key, path: ln.path, kind: ln.kind, targetX, targetY, children: [], x: fromX, y: fromY, vx: 0, vy: 0 }
           const g = svgEl('g', { class: 'node' })
           g.dataset.id = id
-          g.append(svgEl('circle', { class: 'halo', r: HALO_RADIUS }), svgEl('circle', { class: 'dot' }), svgEl('title'))
+          const badge = svgEl('g', { class: 'badge', transform: `translate(${BADGE_OFFSET},${-BADGE_OFFSET})` })
+          badge.append(svgEl('text', { 'text-anchor': 'middle', dy: '0.35em' }), svgEl('title'))
+          g.append(svgEl('circle', { class: 'halo', r: HALO_RADIUS }), svgEl('circle', { class: 'dot' }), svgEl('title'), badge)
           this.nodeEls.set(id, g)
           this.nodeLayer.append(g)
         }
@@ -391,6 +404,12 @@ export class Scene {
         g.dataset.path = ln.path.join('.')
         const classes = ['node', ln.kind]
         if (t.nextRedex !== null && samePath(ln.path, t.nextRedex)) classes.push('next-redex')
+        const redex = t.redexes?.find((r) => samePath(r.path, ln.path))
+        if (redex) {
+          classes.push('redex')
+          g.querySelector('.badge text')!.textContent = redex.rule
+          g.querySelector('.badge title')!.textContent = `Reduce this ${redex.rule} redex`
+        }
         if (this.dragging?.node.id === id) classes.push('dragging')
         if (otherTree) classes.push('dim')
         if (ln.path.length === 0) classes.push('root')
@@ -601,6 +620,19 @@ export class Scene {
   }
 
   private listenForPointer(): void {
+    // Badges: a plain click reduces that redex. They sit on top of their node,
+    // so stop the press from also starting a node click or drag.
+    this.svg.addEventListener('pointerdown', (e) => {
+      if ((e.target as Element).closest('.badge')) e.stopImmediatePropagation()
+    }, { capture: true })
+    this.svg.addEventListener('click', (e) => {
+      const badge = (e.target as Element).closest('.badge')
+      const g = badge?.closest<SVGGElement>('g.node')
+      const node = g?.dataset.id ? this.nodes.get(g.dataset.id) : undefined
+      if (!node || !g!.classList.contains('redex') || g!.classList.contains('leaving')) return
+      this.events.onRedexClick?.({ treeKey: node.treeKey, path: node.path })
+    })
+
     this.svg.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return
       const g = (e.target as Element).closest<SVGGElement>('g.node')

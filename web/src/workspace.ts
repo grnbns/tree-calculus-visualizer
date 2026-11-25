@@ -4,7 +4,7 @@
 // Workspace (plus what the scene needs to animate it), so undo is just
 // "go back to the previous Workspace".
 
-import { step, type Path, type Rule, type Tree } from './engine'
+import { step, stepAt, type Path, type Rule, type Tree } from './engine'
 import { addLeaf, attach, detach, removeBranch, subtreeAt } from './edit'
 import { allIds, freshIds, stepIds, type IdSource, type IdTree } from './ids'
 import { layoutTree } from './render'
@@ -137,13 +137,14 @@ export function tearOff(ws: Workspace, key: string, path: Path, x: number, y: nu
   }
 }
 
-/** One reduction step on one tree. */
+/** One reduction step on one tree: the leftmost-outermost redex, or the one
+ *  at `at` if given. */
 export function stepTree(
-  ws: Workspace, key: string, newId: IdSource,
+  ws: Workspace, key: string, newId: IdSource, at?: Path,
 ): (Change & { rule: Rule; path: Path }) | null {
   const placed = getTree(ws, key)
   if (!placed) return null
-  const s = step(placed.tree)
+  const s = at ? stepAt(placed.tree, at) : step(placed.tree)
   if (!s) return null
   const r = stepIds(placed.ids, s, newId)
   return {

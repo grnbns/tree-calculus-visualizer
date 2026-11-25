@@ -131,3 +131,41 @@ export function reductionSteps(tree: Tree, maxSteps = 1000): { steps: Step[]; fi
     tree = result.tree
   }
 }
+
+// --- Every redex, and reducing a chosen one (milestone 7) ---------------------
+
+export type Redex = { path: Path; rule: Rule }
+
+/** Every place a rule could fire, in leftmost-outermost order (a node before
+ *  its branches, branches left to right). The first one is what `step` picks. */
+export function allRedexes(tree: Tree): Redex[] {
+  const found: Redex[] = []
+  const visit = (t: Tree, path: Path) => {
+    const r = reduceRoot(t)
+    if (r !== null) found.push({ path, rule: r.rule })
+    t.forEach((child, i) => visit(child, [...path, i]))
+  }
+  visit(tree, [])
+  return found
+}
+
+/** Reduce the redex at `path` (instead of the leftmost-outermost one).
+ *  Returns null if no rule applies at that node. */
+export function stepAt(tree: Tree, path: Path): Step | null {
+  const replace = (t: Tree, rest: Path): { tree: Tree; rule: Rule } | null => {
+    if (rest.length === 0) return reduceRoot(t)
+    const [i, ...more] = rest
+    if (i < 0 || i >= t.length) return null
+    const inner = replace(t[i], more)
+    return inner && { tree: t.with(i, inner.tree), rule: inner.rule }
+  }
+  const r = replace(tree, path)
+  return r && { tree: r.tree, rule: r.rule, path }
+}
+
+/** Number of nodes in a tree. */
+export function size(tree: Tree): number {
+  let n = 1
+  for (const child of tree) n += size(child)
+  return n
+}

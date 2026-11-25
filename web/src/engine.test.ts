@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   apply, applyAll, show, isValue, kRule, sRule, fRule,
-  reduceRoot, step, normalize, reductionSteps, type Tree,
+  reduceRoot, step, normalize, reductionSteps, allRedexes, stepAt, size, type Tree,
 } from './engine'
 import { parse } from './parser'
 import rawCases from '../../tests/cases.json'
@@ -154,5 +154,63 @@ describe('matches the Python reference (tests/cases.json)', () => {
       expect(show(r.tree)).toBe(c.result_text)
       expect(r.finished).toBe(c.finished)
     })
+  })
+})
+
+describe('allRedexes / stepAt / size', () => {
+  it('finds every redex, leftmost-outermost first', () => {
+    const k: Tree = [[], STEM, LEAF]          // K redex
+    const s: Tree = [[[]], LEAF, LEAF]        // S redex
+    expect(allRedexes([k, s])).toEqual([
+      { path: [0], rule: 'K' },
+      { path: [1], rule: 'S' },
+    ])
+    expect(allRedexes(parse('△(△△)(△△)'))).toEqual([])
+  })
+
+  it('lists a redex before the redexes inside it', () => {
+    const inner: Tree = [[], STEM, LEAF]
+    const t: Tree = [[], inner, LEAF]          // K redex whose y is a K redex
+    expect(allRedexes(t).map((r) => r.path)).toEqual([[], [1]])
+  })
+
+  it('skips a node whose first branch is still a computation', () => {
+    const t: Tree = [[[], [], []], LEAF, LEAF]
+    expect(allRedexes(t)).toEqual([{ path: [0], rule: 'K' }])
+  })
+
+  it('stepAt reduces the chosen redex and leaves the rest', () => {
+    const k: Tree = [[], STEM, LEAF]
+    const s: Tree = [[[]], LEAF, LEAF]
+    const r = stepAt([k, s], [1])!
+    expect(r.rule).toBe('S')
+    expect(r.path).toEqual([1])
+    expect(r.tree[0]).toBe(k)                  // the K redex is untouched
+    expect(r.tree[1]).toEqual(sRule(s))
+  })
+
+  it('stepAt returns null where no rule applies', () => {
+    expect(stepAt([[], STEM], [])).toBeNull()
+    expect(stepAt([[], STEM], [5])).toBeNull()
+  })
+
+  it('counts nodes', () => {
+    expect(size([])).toBe(1)
+    expect(size(parse('△(△△)(△△)'))).toBe(5)
+  })
+
+  it('agrees with step on every reference case', () => {
+    for (const c of cases) {
+      const limit = c.finished ? 300 : c.steps.length
+      let t = c.input
+      for (let n = 0; n < limit; n++) {
+        const s = step(t)
+        const first = allRedexes(t)[0]
+        if (!s) { expect(first).toBeUndefined(); break }
+        expect(first).toEqual({ path: s.path, rule: s.rule })
+        expect(stepAt(t, s.path)).toEqual(s)
+        t = s.tree
+      }
+    }
   })
 })

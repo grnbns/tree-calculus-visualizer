@@ -8,7 +8,7 @@ This plan is deliberately high-level. Each milestone has a goal, a finish line, 
 
 ## Where things stand (25 Nov 2026)
 
-**Milestones 0–6 are done.** Next up: Milestone 7.
+**Milestones 0–7 are done.** Next up: Milestone 8.
 
 | Milestone | Status |
 |---|---|
@@ -19,8 +19,8 @@ This plan is deliberately high-level. Each milestone has a goal, a finish line, 
 | 4. Make it fluid | ✅ Done |
 | 5. Stable node identity | ✅ Done |
 | 6. Build and join trees | ✅ Done |
-| 7. Step through reductions | ⏭️ Next |
-| 8. Full-screen canvas | Not started |
+| 7. Step through reductions | ✅ Done |
+| 8. Full-screen canvas | ⏭️ Next |
 | 9–10 | Not started |
 
 What exists now:
@@ -32,14 +32,15 @@ What exists now:
 - **`demo.py`**: runs `trace`/`normalize`/`step` on examples so you can watch reductions.
 - **`.gitignore`** and a project **`.venv`** with pytest.
 - **`web/`**: Vite + TypeScript (vanilla) app with Vitest. Vite's demo files removed. Run everything from inside `web/`: `npm run dev` (dev server), `npm test` (Vitest, watch mode), `npm run build` (type-check + production build).
-- **`web/src/engine.ts`, `web/src/parser.ts`**: the TypeScript port. The TS parser also accepts the names `K`, `I`, `D`, `S` in input (e.g. `S K K △`); the Python parser doesn't. Same functions in camelCase (`applyAll`, `isValue`, `kRule`, `reduceRoot`, …). `step` returns `{tree, rule, path}` or `null`; `normalize` returns `{tree, steps, finished}`; `reductionSteps` returns every step (what the visualizer will play through). Trees are `readonly`, so mutation is a type error.
+- **`web/src/engine.ts`, `web/src/parser.ts`**: the TypeScript port. The TS parser also accepts the names `K`, `I`, `D`, `S` in input (e.g. `S K K △`); the Python parser doesn't. Same functions in camelCase (`applyAll`, `isValue`, `kRule`, `reduceRoot`, …). `step` returns `{tree, rule, path}` or `null`; `normalize` returns `{tree, steps, finished}`; `reductionSteps` returns every step. `allRedexes(tree)` lists every `{path, rule}` leftmost-outermost first (the first is what `step` picks); `stepAt(tree, path)` reduces a chosen redex; `size(tree)` counts nodes. Trees are `readonly`, so mutation is a type error.
 - **`web/src/render.ts`**: `layoutTree(tree)` (pure: d3-hierarchy positions, node kind, path per node) plus the spacing/size constants (`NODE_GAP_X`, `LEVEL_GAP_Y`, `NODE_RADIUS`, `COMPUTATION_RADIUS`, `HALO_RADIUS`).
-- **`web/src/scene.ts`**: the live drawing. A `Scene` owns a d3-force simulation: springs with tidy-layout rest lengths, light repulsion, collision, pull toward tidy targets, and a custom sibling-order force (soft push always; a hard no-crossing rule in rows where a node is being dragged) so branches never swap sides at rest or while dragging. Drag a node and it springs back; the simulation settles to a stop. `setWorkspace(trees, {selected, born})` shows several trees side by side (each with its own root position) and matches nodes **by id**: survivors travel to their new place (even into another tree), copies sprout from the node they were copied from, vanished nodes and links fade out (350 ms). The simulation is driven by the scene's own frame loop (not d3's timer) so it has an **animation speed** (physics ticks per frame, default 0.5; positions are interpolated between ticks so slow motion stays smooth; dragging always runs at full speed; fades scale with it). Physics defaults are `DEFAULT_PARAMS` (damping 0.7, speed 0.5); a "Physics tuning" panel on the page has sliders and a "Copy values" button. In dev, an order check warns in the console if siblings are ever out of order at rest or while dragging. The scene never changes trees itself: it reports `onClick`, `onDragStart` and `onDrop` (with the drop-target node, highlighted while a tree is carried by its root) to `main.ts`. Each node element has `data-tree` and `data-path`.
+- **`web/src/scene.ts`**: the live drawing. A `Scene` owns a d3-force simulation: springs with tidy-layout rest lengths, light repulsion, collision, pull toward tidy targets, and a custom sibling-order force (soft push always; a hard no-crossing rule in rows where a node is being dragged) so branches never swap sides at rest or while dragging. Drag a node and it springs back; the simulation settles to a stop. `setWorkspace(trees, {selected, born})` shows several trees side by side (each with its own root position) and matches nodes **by id**: survivors travel to their new place (even into another tree), copies sprout from the node they were copied from, vanished nodes and links fade out (350 ms). The simulation is driven by the scene's own frame loop (not d3's timer) so it has an **animation speed** (physics ticks per frame, default 0.5; positions are interpolated between ticks so slow motion stays smooth; dragging always runs at full speed; fades scale with it). Physics defaults are `DEFAULT_PARAMS` (damping 0.7, speed 0.5); a "Physics tuning" panel on the page has sliders and a "Copy values" button. In dev, an order check warns in the console if siblings are ever out of order at rest or while dragging. The scene never changes trees itself: it reports `onClick`, `onDragStart` and `onDrop` (with the drop-target node, highlighted while a tree is carried by its root) to `main.ts`. Each node element has `data-tree` and `data-path`. Every redex gets a clickable **K/S/F badge** (just the letter; `onRedexClick`); only the one ▶| will reduce gets a ring. A first click on an unselected (dimmed) tree, or one of its badges, only selects it. `isSettled(threshold)` tells playback when the last step's motion has calmed down.
 - **`web/src/ids.ts`**: stable node identity, kept **beside** the tree (the engine stays pure). An `IdTree` has the same shape as the `Tree`. `freshIds(tree)` for a new tree; `stepIds(ids, step)` returns the new ids plus `born` (copy → origin) and `died`. In a redex `△ b0 y z rest`: **K** → y's node becomes the result (z, R, b0 vanish); **S** → y's node becomes the result, x and the original z keep their ids, the second z is a fresh copy; **F** → z's node becomes the result (y, R, b0 vanish).
 - **`web/src/edit.ts`**: pure edits on a tree + its ids: `addLeaf`, `removeBranch` (any branch; later siblings shift left), `attach` (the node is applied to another tree, which keeps its ids), `detach`.
 - **`web/src/workspace.ts`**: the workspace model, pure and immutable: a list of placed trees `{key, tree, ids, x, y}` plus the selected key. Actions return a `Change` (new workspace + `born` + a message for the learner): `addTree`, `replaceTree`, `removeTree`, `moveTree`, `addLeafAt`, `removeAt` (root = whole tree), `joinTrees`, `tearOff`, `stepTree`.
-- **`web/src/main.ts`**: the UI. Mode toggle **Add branch / Remove / Move** (keys A/R/M; shift-click flips add ↔ remove). Dragging a tree by its root carries the whole tree in any mode; drop it on a node of another tree to join (that node is applied to it) or on empty space to move it. In Move mode, dragging any other node tears it off into its own tree (tear + drop = one undo step). **Undo/Redo** (Ctrl+Z / Ctrl+Shift+Z) over whole-workspace snapshots, so nodes glide back. Typing in the input box edits the selected tree (keystrokes coalesce into one undo step); **New tree** and the example buttons add trees. Step acts on the selected tree; unselected trees are dimmed. A message line explains each edit (e.g. when an added leaf creates a redex). `?t=<tree>` in the URL sets the starting tree.
-- **`web/src/*.test.ts`**: 347 Vitest tests, including every case in `tests/cases.json` (same steps, same paths, same order, same result as Python), id bookkeeping on every step of every case, edits, and the workspace (including the milestone 6 finish line: build I, drop x on it, get I x).
+- **`web/src/run.ts`**: a **reduction run**, watched like a video: the list of workspace frames since you started stepping the selected tree. `forward` (replays a recorded frame or reduces), `reduce(run, newId, at?)` (a chosen redex; drops later frames), `back`, `seek` (big jumps animate sensibly: copies sprout from something still on screen), `describeFrame`. Limits: `MAX_RUN_STEPS` (200) and `MAX_NODES` (1500) stop playback with a message.
+- **`web/src/main.ts`**: the UI. Mode toggle **Add branch / Remove / Move** (keys A/R/M; shift-click flips add ↔ remove). Dragging a tree by its root carries the whole tree in any mode; drop it on a node of another tree to join (that node is applied to it) or on empty space to move it. In Move mode, dragging any other node tears it off into its own tree (tear + drop = one undo step). **Undo/Redo** (Ctrl+Z / Ctrl+Shift+Z) over whole-workspace snapshots, so nodes glide back. Typing in the input box edits the selected tree (keystrokes coalesce into one undo step); **New tree** and the example buttons add trees. Unselected trees are dimmed. **Playback** for the selected tree: **|◀**, **▶ Play / ❚❚ Pause**, **▶|**, a scrubber with "Step n of m: rule at path", and a **Play speed** slider (steps per second; separate from the physics "Animation speed"). Keys: Space = play/pause, ← / → = step back/forward. Play waits for each step's motion to mostly settle, and stops by itself at a normal form or a limit. **Undo vs. playback:** the scrubber and arrows move within a run without losing frames; to Undo/Redo a whole run is one action. Any edit, undo, redo or switching trees ends the run where it is (later frames are dropped); a run that ends back at its start leaves no undo entry. A message line explains each edit (e.g. when an added leaf creates a redex). `?t=<tree>` in the URL sets the starting tree.
+- **`web/src/*.test.ts`**: 361 Vitest tests, including every case in `tests/cases.json` (same steps, same paths, same order, same result as Python), id bookkeeping on every step of every case, edits, and the workspace (including the milestone 6 finish line: build I, drop x on it, get I x), `allRedexes`/`stepAt` against `step` on every reference case, and runs (play S K K x to x, back/forward keep frames, choosing a redex mid-run, the step limit, seek).
 
 Things to know before building on it:
 
@@ -129,16 +130,17 @@ For anything to *move* rather than *redraw*, each node needs an id that survives
 
 **Done when:** you can build `I` by clicking, build `x` separately, drop `x` onto `I`, and see a redex appear.
 
-### 7. Step through reductions
-- Highlight every redex; show which rule would fire at each.
-- **Play / Pause** on the selected tree: keeps stepping automatically until it reaches a normal form (or the step limit), then stops by itself. Each step waits for the previous animation to mostly settle, with a playback speed control.
-- **Step** becomes a small **▶|** arrow button: one step at a time while paused (disabled while playing). Its partner **|◀** steps back.
-- A step limit for trees that never finish (Play stops there with a message instead of running forever).
-- Default order: leftmost-outermost (what your `step` does). Clicking a highlighted redex reduces *that* one instead.
-- A history of steps you can click through. (Reset is gone since milestone 6; Undo/Redo and this history cover it. Decide how step history and edit undo fit together: probably one timeline.)
-- Keyboard: Space = play/pause, → / ← = step forward/back.
+### 7. Step through reductions ✅
+- [x] Highlight every redex; show which rule would fire at each (a K/S/F badge on each; the next one also has a ring).
+- [x] **Play / Pause** on the selected tree: keeps stepping until a normal form (or a limit), then stops by itself. Each step waits for the previous animation to mostly settle; **Play speed** slider.
+- [x] **Step** is now a small **▶|** arrow (disabled while playing), with **|◀** to step back.
+- [x] A step limit (200) and a node limit (1500) for trees that never finish or explode; Play stops there with a message.
+- [x] Default order: leftmost-outermost. Clicking a redex's badge reduces *that* one instead.
+- [x] A history of steps you can scrub through (slider + "Step n of m: rule at path").
+- [x] Keyboard: Space = play/pause, → / ← = step forward/back.
 
 **Done when:** you can play `S K K x` to `x`, pause partway, step with the arrow, and scrub back and forth smoothly.
+**Answer (undo vs. step back):** two tools, not one. Playback controls move within a *run* (all steps since you started stepping a tree) without losing frames, like a video. Undo/Redo work on your actions, and a whole run is one action. Editing partway through a run keeps it up to that point.
 
 ### 8. Full-screen canvas: floating UI, pan and zoom, no teleporting
 A UI makeover: the canvas *is* the page, like Obsidian's graph view, instead of a framed box between page sections.
