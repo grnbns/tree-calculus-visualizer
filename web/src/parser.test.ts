@@ -36,6 +36,29 @@ describe('parse', () => {
   })
 })
 
+describe('names in the input', () => {
+  it('expand to their trees', () => {
+    expect(parse('K')).toEqual(parse(K))
+    expect(parse('I')).toEqual(parse(I))
+    expect(parse('S')).toEqual(parse(S))
+  })
+
+  it('work as heads and as arguments', () => {
+    expect(parse('S K K (△△)')).toEqual(applyAll(parse(S), parse(K), parse(K), parse('△△')))
+    expect(parse('△ I K')).toEqual(applyAll(parse('△'), parse(I), parse(K)))
+    expect(parse('K(I)△')).toEqual(applyAll(parse(K), parse(I), parse('△')))
+  })
+
+  it('reduce like the book says: S K K x = x', () => {
+    expect(normalize(parse('SKK(△△△)')).tree).toEqual(parse('△△△'))
+  })
+
+  it('still rejects other letters', () => {
+    expect(() => parse('X')).toThrow()
+    expect(() => parse('k')).toThrow()
+  })
+})
+
 describe('named trees', () => {
   const x = parse('△△')
   const y = parse('△△△')

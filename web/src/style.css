@@ -209,3 +209,76 @@ main {
   transform-origin: center;
   transition: transform var(--leave-ms, 350ms) ease-in;
 }
+
+/* --- Milestone 6: modes, workspace, joining -------------------------------- */
+
+.input-row label { color: var(--muted); font-size: 0.9rem; }
+
+.examples .label {
+  color: var(--muted);
+  font-size: 0.9rem;
+  align-self: center;
+  margin-right: 2px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar .controls { margin-top: 0; }
+
+.modes {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.modes button {
+  border: none;
+  border-radius: 0;
+  padding: 6px 14px;
+}
+
+.modes button + button { border-left: 1px solid var(--border); }
+
+.modes button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.mode-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  min-height: 2.6em;
+}
+
+#message {
+  margin: 4px 0 0;
+  min-height: 1.5em;
+  font-size: 0.9rem;
+}
+
+/* Cursors say what a click will do. */
+#canvas[data-mode='add'] .node { cursor: copy; }
+#canvas[data-mode='remove'] .node { cursor: not-allowed; }
+#canvas[data-mode='move'] .node { cursor: grab; }
+#canvas .node.root { cursor: grab; }
+#canvas .node.dragging,
+#canvas.carrying .node { cursor: grabbing; }
+
+/* With several trees, the unselected ones step back a little. */
+.node.dim, .links line.dim { opacity: 0.5; }
+
+/* A node of another tree that a carried tree would be attached to. */
+.node.drop-target .dot {
+  stroke: var(--accent);
+  stroke-width: 4;
+  paint-order: stroke;
+}
+.node.drop-target { opacity: 1; }

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { countOrderViolations, forceSiblingOrder, pathId, type SimNode } from './scene'
 
 function node(id: string, x: number, children: SimNode[] = []): SimNode {
-  return { id, path: [], kind: 'leaf', targetX: x, targetY: 0, children, x, y: 0, vx: 0, vy: 0 }
+  return { id, treeKey: 't', path: [], kind: 'leaf', targetX: x, targetY: 0, children, x, y: 0, vx: 0, vy: 0 }
 }
 
 describe('pathId', () => {

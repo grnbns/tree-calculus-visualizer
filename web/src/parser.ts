@@ -1,5 +1,6 @@
-// Parser for △ notation. TypeScript port of parser.py.
+// Parser for △ notation. TypeScript port of parser.py, plus named trees.
 // "." and "^" are accepted as aliases for "△"; spaces are ignored.
+// The names K, I, D and S stand for those trees, so "S K K (△△)" works.
 
 import { apply, LEAF, type Tree } from './engine'
 
@@ -12,11 +13,15 @@ export const D = '△(△△)(△△△)'
 // plain string concatenation like K + D would NOT mean "K applied to D".
 export const S = `${D}(${K}(${D}))(${D}(${K})(${K}(${D})))`
 
-/** Read ONE argument starting at s[i]: a '△' or a '( ... )' group.
+/** Names you can type in place of a tree. */
+export const NAMED_TREES: Readonly<Record<string, string>> = { K, I, D, S }
+
+/** Read ONE argument starting at s[i]: a '△', a name (K, I, D, S) or a '( ... )' group.
  *  Returns the tree and the index just after it. */
 function parseAtom(s: string, i: number): [Tree, number] {
   if (i >= s.length) throw new Error('unexpected end of input')
   if (s[i] === LEAF) return [[], i + 1]
+  if (s[i] in NAMED_TREES) return [parse(NAMED_TREES[s[i]]), i + 1]
   if (s[i] === '(') {
     const [inner, j] = parseSeq(s, i + 1)
     if (j >= s.length || s[j] !== ')') throw new Error(`missing ')' at ${j}`)
