@@ -13,7 +13,13 @@ export type LaidOutNode = {
   x: number
   y: number
   kind: NodeKind
+  /** set if this node is a collapsed variable: drawn as a labelled chip */
+  chip?: string
 }
+
+/** Collapsed variables, by path key ('0.1'; '' = root): the chip hides the
+ *  node's first `arity` branches (see marks.ts). */
+export type ChipsByPath = ReadonlyMap<string, { readonly name: string; readonly arity: number }>
 
 export type LaidOutLink = { source: LaidOutNode; target: LaidOutNode }
 
@@ -30,7 +36,11 @@ export const LEVEL_GAP_Y = 56
 // Node sizes (circle radii), in the same SVG units.
 export const NODE_RADIUS = 6           // leaf, stem, fork
 export const COMPUTATION_RADIUS = 7.5  // nodes with 3+ branches (drawn orange)
-export const HALO_RADIUS = 12          // ring around the next redex
+
+// Chips (collapsed variables): a rounded box around the name.
+export const CHIP_HEIGHT = 18
+const CHIP_CHAR_WIDTH = 7.5
+export const chipWidth = (name: string) => Math.max(CHIP_HEIGHT, 10 + name.length * CHIP_CHAR_WIDTH)
 
 export function kindOf(t: Tree): NodeKind {
   switch (t.length) {
@@ -41,24 +51,35 @@ export function kindOf(t: Tree): NodeKind {
   }
 }
 
+type Item = { t: Tree; path: Path; chip?: { name: string; arity: number } }
+
 /** Where each node goes. The root is at (0, 0); children are below their
- *  parent, in branch order, so the first branch is always on the left. */
-export function layoutTree(t: Tree): Layout {
-  // A tree is already "a list of children", which is what d3 wants.
-  const root = hierarchy<Tree>(t, (node) => (node.length > 0 ? [...node] : null))
-  d3Tree<Tree>().nodeSize([NODE_GAP_X, LEVEL_GAP_Y])(root)
+ *  parent, in branch order, so the first branch is always on the left.
+ *  A collapsed variable (`chips`) is one node: only its arguments hang below. */
+export function layoutTree(t: Tree, chips?: ChipsByPath): Layout {
+  const item = (t: Tree, path: Path): Item => ({ t, path, chip: chips?.get(path.join('.')) })
+  const root = hierarchy<Item>(item(t, []), (n) => {
+    const from = n.chip?.arity ?? 0
+    const kids: Item[] = []
+    for (let i = from; i < n.t.length; i++) kids.push(item(n.t[i], [...n.path, i]))
+    return kids.length ? kids : null
+  })
+  // Wide chips push their neighbours apart.
+  const extra = (n: { data: Item }) => (n.data.chip ? Math.max(0, chipWidth(n.data.chip.name) - 2 * NODE_RADIUS) / 2 : 0)
+  d3Tree<Item>()
+    .nodeSize([NODE_GAP_X, LEVEL_GAP_Y])
+    .separation((a, b) => (a.parent === b.parent ? 1 : 2) + (extra(a) + extra(b)) / NODE_GAP_X)(root)
 
   const byD3Node = new Map<unknown, LaidOutNode>()
   const nodes: LaidOutNode[] = []
   for (const d of root.descendants()) {
-    const parentPath = d.parent ? byD3Node.get(d.parent)!.path : []
-    const index = d.parent ? d.parent.children!.indexOf(d) : -1
     const node: LaidOutNode = {
-      path: d.parent ? [...parentPath, index] : [],
+      path: d.data.path,
       x: d.x!,
       y: d.y!,
-      kind: kindOf(d.data),
+      kind: kindOf(d.data.t),
     }
+    if (d.data.chip) node.chip = d.data.chip.name
     byD3Node.set(d, node)
     nodes.push(node)
   }

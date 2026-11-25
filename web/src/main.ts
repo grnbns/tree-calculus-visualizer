@@ -1,27 +1,27 @@
 import './style.css'
 import { allRedexes, show, step, type Path } from './engine'
-import { parse, K, I, D, S } from './parser'
-import { Scene, DEFAULT_PARAMS, type PhysicsParams } from './scene'
+import { parseNamed, D } from './parser'
+import { Scene, DEFAULT_PARAMS, type PhysicsParams, type PointHit } from './scene'
 import { idSource } from './ids'
 import {
-  addLeafAt, addTree, emptyWorkspace, getTree, joinTrees, moveTree, removeAt,
-  replaceTree, selectTree, tearOff, type Change, type Workspace,
+  addFragment, addLeafAt, addTree, collapseChip, emptyWorkspace, expandChip, getTree, joinTrees,
+  moveTree, nameAt, pasteOnto, removeAt, replaceTree, selectTree, tearOff,
+  type Change, type PlacedTree, type Workspace,
 } from './workspace'
+import { collapsedChips, enclosingMarks, fragmentAt, type Fragment } from './marks'
+import { defineVar, deleteVar, loadVars, lookupIn, nameProblem, saveVars, showNamed, type Vars } from './vars'
 import {
   atEnd, back, currentWs, describeFrame, forward, reduce, seek, startRun,
   type Moved, type Run, type Stopped,
 } from './run'
 
+// Built-in variables come first in the Add menu, then these, then yours.
 const EXAMPLES: [label: string, text: string][] = [
-  ['△', '△'],
-  ['K', K],
-  ['I', I],
-  ['D', D],
-  ['S', S],
-  ['K x y', `${K}(△△)(△△△)`],
-  ['I x', `${I}(△△)`],
-  ['S K K x', `${S}(${K})(${K})(△△)`],
+  ['K x y', 'K(△△)(△△△)'],
+  ['I x', 'I(△△)'],
+  ['S K K x', 'S K K(△△)'],
 ]
+const VARS_KEY = 'tree-calculus-vars'
 
 type Mode = 'add' | 'remove' | 'move'
 
@@ -45,6 +45,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </div>
     <div class="examples" id="examples"><span class="label">Add</span></div>
     <p class="error" id="error" role="alert"></p>
+    <p class="status" id="status" role="status"></p>
   </section>
 
   <section class="panel top-right" aria-label="Tools">
@@ -70,6 +71,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <p><b>Add</b> (A): click a node to give it a leaf branch, which applies it to △. <b>Remove</b> (R): click to remove a branch, or a root to remove its tree. Shift-click swaps the two. <b>Move</b> (M): drag any node to tear it off.</p>
     <p>In every mode, drag a tree by its <b>root</b> onto a node of another tree to join them (that node is applied to it). The first click on a dimmed tree selects it.</p>
     <p><b>Reduce:</b> ▶| steps (→), |◀ steps back (←), Space plays and pauses. Click a K/S/F letter to reduce that redex instead.</p>
+    <p><b>Variables:</b> right-click a node → <i>Name this…</i> to save it as a variable (V, X2, True…). It shows as a chip; type its name or use the Add menu to make more. Right-click a chip to expand it. Reductions open a chip only when a rule needs its insides.</p>
+    <p><b>Copy and paste:</b> ⌘/Ctrl+C copies the subtree under the pointer (or the selected tree) as △ text; ⌘/Ctrl+V pastes onto the node under the pointer, or as a new tree. Also in the right-click menu.</p>
     <p><b>View:</b> drag empty space or scroll to pan; ctrl/⌘ + scroll or pinch to zoom; F fits everything.</p>
   </section>
 
@@ -77,6 +80,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <section class="panel bottom-left" aria-label="Current tree">
     <span class="panel-label">Current tree</span>
     <code id="notation" title="Click to show all"></code>
+    <code id="notation-raw" title="The same tree in plain △ notation"></code>
   </section>
 
   <section class="panel bottom-center playback" aria-label="Reduction playback">
@@ -104,6 +108,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
             aria-expanded="false" aria-controls="tuning">⚙</button>
   </section>
   </div>
+
+  <div class="panel context-menu" id="context-menu" role="menu" hidden></div>
 `
 
 const $ = <T extends Element>(sel: string) => document.querySelector<T>(sel)!
@@ -111,6 +117,9 @@ const input = $<HTMLInputElement>('#tree-input')
 const errorBox = $<HTMLParagraphElement>('#error')
 const svg = $<SVGSVGElement>('#canvas')
 const notation = $<HTMLElement>('#notation')
+const notationRaw = $<HTMLElement>('#notation-raw')
+const statusBox = $<HTMLParagraphElement>('#status')
+const menu = $<HTMLDivElement>('#context-menu')
 const backBtn = $<HTMLButtonElement>('#back-btn')
 const playBtn = $<HTMLButtonElement>('#play-btn')
 const fwdBtn = $<HTMLButtonElement>('#fwd-btn')
@@ -127,6 +136,32 @@ const sliders = $<HTMLDivElement>('#sliders')
 
 const scene = new Scene(svg)
 const newId = idSource()
+
+// --- Variables (milestone 9), saved in the browser ----------------------------------
+
+let vars: Vars = loadVars(readStorage())
+const lookup = (name: string) => lookupIn(vars)(name)
+
+function readStorage(): string | null {
+  try { return localStorage.getItem(VARS_KEY) } catch { return null }
+}
+
+function saveVarsNow(): void {
+  try { localStorage.setItem(VARS_KEY, saveVars(vars)) } catch { /* private window: not saved */ }
+}
+
+/** A tree with its variables, as written: collapsed chips by name. */
+function namedText(t: PlacedTree): string {
+  const f = fragmentAt(t.tree, t.ids, ws.marks)
+  return showNamed(f.tree, f.marks.filter((m) => !m.mark.expanded))
+}
+
+let statusTimer: number | null = null
+function say(text: string): void {
+  statusBox.textContent = text
+  if (statusTimer !== null) clearTimeout(statusTimer)
+  statusTimer = window.setTimeout(() => (statusBox.textContent = ''), 5000)
+}
 
 // --- State and history ---------------------------------------------------------
 //
@@ -157,13 +192,13 @@ function commit(change: Change, opts: { typing?: boolean; sameAction?: boolean }
   redoStack.length = 0
   lastTypedKey = opts.typing ? change.ws.selected : null
   ws = change.ws
-  render(change.born)
+  render(change.born, change.absorbed)
 }
 
 // Trees on screen at the last render: new ones get brought into view.
 let shownKeys = new Set<string>()
 
-function render(born?: ReadonlyMap<string, string>): void {
+function render(born?: ReadonlyMap<string, string>, absorbed?: ReadonlyMap<string, string>): void {
   // The camera never jumps. It only glides to reveal trees that just appeared
   // (added, torn off, brought back by undo) and, while playing, the tree being
   // played as it grows; and only if they'd otherwise be off screen.
@@ -172,17 +207,26 @@ function render(born?: ReadonlyMap<string, string>): void {
   if (playing && ws.selected) reveal.push(ws.selected)
   shownKeys = new Set(keys)
   scene.setWorkspace(
-    ws.trees.map((t) => ({ ...t, nextRedex: step(t.tree)?.path ?? null, redexes: allRedexes(t.tree) })),
-    { selected: ws.selected, born, reveal },
+    ws.trees.map((t) => ({
+      ...t,
+      nextRedex: step(t.tree)?.path ?? null,
+      redexes: allRedexes(t.tree),
+      chips: collapsedChips(t.ids, ws.marks),
+    })),
+    { selected: ws.selected, born, reveal, absorbed },
   )
   const sel = getTree(ws, ws.selected)
   if (!sel) {
     notation.textContent = ''
+    notationRaw.textContent = ''
   } else {
-    notation.textContent = show(sel.tree)
+    const named = namedText(sel)
+    const raw = show(sel.tree)
+    notation.textContent = named
+    notationRaw.textContent = named === raw ? '' : raw
     // Keep the input box showing the selected tree, unless you're typing in it.
     if (document.activeElement !== input) {
-      input.value = show(sel.tree)
+      input.value = named
       errorBox.textContent = ''
     }
   }
@@ -250,7 +294,7 @@ function applyMove(r: Moved | Stopped | null): boolean {
   }
   run = r.run
   ws = currentWs(run)
-  render(r.born)
+  render(r.born, r.absorbed)
   return true
 }
 
@@ -432,16 +476,19 @@ scene.events.onDrop = ({ treeKey, x, y, target }) => {
 // --- Input box, examples, buttons, keys ---------------------------------------------
 
 function onInput(): void {
-  let tree
+  let p
   try {
-    tree = parse(input.value.trim() || '△')
+    p = parseNamed(input.value.trim() || '△', lookup)
   } catch (e) {
     errorBox.textContent = (e as Error).message
     return // keep showing the last good tree
   }
   errorBox.textContent = ''
   // Typing edits the selected tree; with nothing selected, it starts one.
-  commit(ws.selected ? replaceTree(ws, ws.selected, tree, newId) : addTree(ws, tree, newId), { typing: true })
+  commit(
+    ws.selected ? replaceTree(ws, ws.selected, p.tree, newId, p.marks) : addTree(ws, p.tree, newId, undefined, p.marks),
+    { typing: true },
+  )
 }
 
 input.addEventListener('input', onInput)
@@ -449,21 +496,201 @@ input.addEventListener('blur', () => { lastTypedKey = null })
 
 $<HTMLButtonElement>('#new-btn').addEventListener('click', () => {
   try {
-    commit(addTree(ws, parse(input.value.trim() || '△'), newId))
+    commit(addFragment(ws, parseNamed(input.value.trim() || '△', lookup), newId))
     errorBox.textContent = ''
   } catch (e) {
     errorBox.textContent = (e as Error).message
   }
 })
 
-for (const [label, text] of EXAMPLES) {
-  const b = document.createElement('button')
-  b.type = 'button'
-  b.textContent = label
-  b.title = `Add ${text} as a new tree`
-  b.addEventListener('click', () => commit(addTree(ws, parse(text), newId)))
-  examples.append(b)
+/** The Add menu: △, the built-in variables, examples, then your variables. */
+function renderAddMenu(): void {
+  examples.replaceChildren(examples.querySelector('.label')!)
+  const button = (label: string, text: string, title = `Add ${text} as a new tree`) => {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.textContent = label
+    b.title = title
+    b.addEventListener('click', () => commit(addFragment(ws, parseNamed(text, lookup), newId)))
+    examples.append(b)
+    return b
+  }
+  button('△', '△')
+  for (const v of vars.values()) if (v.builtin) button(v.name, v.name, `Add ${v.name} = ${v.text}`).classList.add('var')
+  for (const [label, text] of EXAMPLES) button(label, text)
+  for (const v of vars.values()) {
+    if (v.builtin) continue
+    const b = button(v.name, v.name, `Add ${v.name} = ${v.text}`)
+    b.classList.add('var', 'user-var')
+    const del = document.createElement('span')
+    del.className = 'delete'
+    del.textContent = '×'
+    del.title = `Forget the variable ${v.name}`
+    del.setAttribute('role', 'button')
+    del.addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (!confirm(`Forget the variable ${v.name}? Chips already on the canvas stay.`)) return
+      vars = deleteVar(vars, v.name)
+      saveVarsNow()
+      renderAddMenu()
+    })
+    b.append(del)
+  }
 }
+renderAddMenu()
+
+// --- Copy and paste (milestone 9) ---------------------------------------------------
+//
+// The system clipboard gets plain △ text. We also keep our own copy with the
+// variables in it, and use that when the clipboard still holds the same text.
+
+let clip: { frag: Fragment; text: string } | null = null
+let pointer: { clientX: number; clientY: number } | null = null
+
+svg.addEventListener('pointermove', (e) => { pointer = { clientX: e.clientX, clientY: e.clientY } })
+svg.addEventListener('pointerleave', () => { pointer = null })
+// Clicking the canvas leaves the input box, so ⌘C / ⌘V act on the canvas.
+svg.addEventListener('pointerdown', () => { if (document.activeElement === input) input.blur() })
+
+/** The subtree to copy: under `hit`, or the selected tree. */
+function copyTarget(hit: PointHit | null): Fragment | null {
+  const node = hit?.node
+  const t = getTree(ws, node?.treeKey ?? ws.selected)
+  if (!t) return null
+  return fragmentAt(t.tree, t.ids, ws.marks, node?.path ?? [])
+}
+
+function remember(frag: Fragment): string {
+  const text = show(frag.tree)
+  clip = { frag, text }
+  const named = showNamed(frag.tree, frag.marks.filter((m) => !m.mark.expanded))
+  say(`Copied ${named.length > 40 ? named.slice(0, 40) + '…' : named}`)
+  return text
+}
+
+/** Paste onto the node under `hit`, or as a new tree where it points. */
+function pasteFragment(frag: Fragment, hit: PointHit | null): void {
+  if (hit?.node) commit(pasteOnto(ws, hit.node.treeKey, hit.node.path, frag, newId))
+  else commit(addFragment(ws, frag, newId, hit ? { x: hit.x, y: hit.y } : undefined))
+}
+
+function fragmentFromText(text: string): Fragment | null {
+  if (clip && text === clip.text) return clip.frag
+  try {
+    return parseNamed(text.trim(), lookup)
+  } catch (e) {
+    say(`Can't paste that: ${(e as Error).message}`)
+    return null
+  }
+}
+
+const hitUnderPointer = () => (pointer ? scene.hitAt(pointer.clientX, pointer.clientY) : null)
+const typingInField = () => document.activeElement instanceof HTMLInputElement && document.activeElement.type !== 'range'
+
+document.addEventListener('copy', (e) => {
+  if (typingInField() || !e.clipboardData) return
+  const frag = copyTarget(hitUnderPointer())
+  if (!frag) return
+  e.preventDefault()
+  e.clipboardData.setData('text/plain', remember(frag))
+})
+
+document.addEventListener('paste', (e) => {
+  if (typingInField()) return
+  const text = e.clipboardData?.getData('text/plain') ?? ''
+  e.preventDefault()
+  const frag = text ? fragmentFromText(text) : clip?.frag
+  if (frag) pasteFragment(frag, hitUnderPointer())
+})
+
+// --- Right-click menu ------------------------------------------------------------------
+
+function closeMenu(): void {
+  menu.hidden = true
+  menu.replaceChildren()
+}
+
+function openMenu(hit: PointHit, clientX: number, clientY: number): void {
+  closeMenu()
+  const item = (label: string, action: () => void, title?: string) => {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.setAttribute('role', 'menuitem')
+    b.textContent = label
+    if (title) b.title = title
+    b.addEventListener('click', () => { closeMenu(); action() })
+    menu.append(b)
+  }
+  const paste = async (at: PointHit) => {
+    let text = ''
+    try { text = await navigator.clipboard.readText() } catch { /* no permission: use our own copy */ }
+    const frag = text ? fragmentFromText(text) : clip?.frag
+    if (frag) pasteFragment(frag, at)
+    else say('Nothing to paste: copy a tree first.')
+  }
+
+  const node = hit.node
+  const t = node && getTree(ws, node.treeKey)
+  if (node && t) {
+    const mark = ws.marks.get(node.id)
+    if (mark && !mark.expanded) {
+      item(`Expand ${mark.name}`, () => commit(expandChip(ws, node.treeKey, node.id)))
+    }
+    const around = enclosingMarks(t.ids, ws.marks, node.path).find((id) => ws.marks.get(id)!.expanded)
+    if (around) item(`Collapse ${ws.marks.get(around)!.name}`, () => commit(collapseChip(ws, node.treeKey, around)))
+    item('Copy', () => {
+      const frag = copyTarget(hit)
+      if (frag) navigator.clipboard?.writeText(remember(frag)).catch(() => {})
+    }, '⌘/Ctrl+C over a node')
+    item('Paste here', () => paste(hit), 'Apply this node to the copied tree (⌘/Ctrl+V over a node)')
+    item('Name this…', () => openNameForm(node.treeKey, node.path, clientX, clientY))
+    item(node.path.length ? 'Remove' : 'Remove tree', () => commit(removeAt(ws, node.treeKey, node.path)))
+  } else {
+    item('Paste', () => paste(hit), 'Paste as a new tree here (⌘/Ctrl+V)')
+  }
+  showMenuAt(clientX, clientY)
+  menu.querySelector('button')?.focus()
+}
+
+function showMenuAt(clientX: number, clientY: number): void {
+  menu.hidden = false
+  const r = menu.getBoundingClientRect()
+  menu.style.left = `${Math.max(4, Math.min(clientX, innerWidth - r.width - 4))}px`
+  menu.style.top = `${Math.max(4, Math.min(clientY, innerHeight - r.height - 4))}px`
+}
+
+function openNameForm(treeKey: string, path: Path, clientX: number, clientY: number): void {
+  closeMenu()
+  const form = document.createElement('form')
+  form.className = 'name-form'
+  form.innerHTML = `<label>Name <input name="name" spellcheck="false" autocomplete="off" maxlength="12" placeholder="V" /></label>
+    <button type="submit">Save</button><p class="error"></p>`
+  const field = form.querySelector('input')!
+  const err = form.querySelector<HTMLParagraphElement>('.error')!
+  form.addEventListener('submit', (e) => {
+    e.preventDefault()
+    const name = field.value.trim()
+    const problem = nameProblem(vars, name)
+    if (problem) { err.textContent = problem; return }
+    if (vars.has(name) && !confirm(`Replace the variable ${name}? Chips already on the canvas keep the old meaning.`)) return
+    const t = getTree(ws, treeKey)
+    if (!t) return closeMenu()
+    vars = defineVar(vars, name, fragmentAt(t.tree, t.ids, ws.marks, path))
+    saveVarsNow()
+    renderAddMenu()
+    closeMenu()
+    commit(nameAt(ws, treeKey, path, name))
+    say(`Saved ${name}. Type ${name} or use the Add menu to make more.`)
+  })
+  menu.append(form)
+  showMenuAt(clientX, clientY)
+  field.focus()
+}
+
+scene.events.onContextMenu = ({ clientX, clientY, ...hit }) => openMenu(hit, clientX, clientY)
+document.addEventListener('pointerdown', (e) => {
+  if (!menu.hidden && !menu.contains(e.target as Node)) closeMenu()
+}, { capture: true })
 
 undoBtn.addEventListener('click', undo)
 redoBtn.addEventListener('click', redo)
@@ -503,6 +730,7 @@ document.addEventListener('keydown', (e) => {
   } else if (!typing && plain && e.key === '?') {
     toggleHelp()
   } else if (e.key === 'Escape') {
+    closeMenu()
     toggleHelp(false)
     toggleTuning(false)
   } else if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey) {

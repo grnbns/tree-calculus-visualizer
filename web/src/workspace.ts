@@ -6,7 +6,11 @@
 
 import { step, stepAt, type Path, type Rule, type Tree } from './engine'
 import { addLeaf, attach, detach, removeBranch, subtreeAt } from './edit'
-import { allIds, freshIds, stepIds, type IdSource, type IdTree } from './ids'
+import { allIds, freshIds, idsAt, stepIds, type IdSource, type IdTree } from './ids'
+import {
+  NO_MARKS, carryMarks, chipsToUnfold, collapsedChips, insideIds, placeMarks, pruneMarks, setExpanded,
+  type Fragment, type Marks, type PathMark,
+} from './marks'
 import { layoutTree } from './render'
 
 export type PlacedTree = {
@@ -21,6 +25,8 @@ export type Workspace = {
   trees: readonly PlacedTree[]
   selected: string | null
   nextKey: number
+  /** which nodes are variables, shown as chips (marks.ts); keyed by node id */
+  marks: Marks
 }
 
 /** The result of an action: the new workspace, plus animation hints. */
@@ -28,6 +34,8 @@ export type Change = {
   ws: Workspace
   /** new node id -> id it was copied from (S rule copies) */
   born?: ReadonlyMap<string, string>
+  /** node id -> id of the chip it disappears into (collapsing a variable) */
+  absorbed?: ReadonlyMap<string, string>
   /** short explanation for the learner */
   message?: string
 }
@@ -36,7 +44,14 @@ export type Change = {
 export const TREE_GAP = 70
 
 export function emptyWorkspace(): Workspace {
-  return { trees: [], selected: null, nextKey: 1 }
+  return { trees: [], selected: null, nextKey: 1, marks: NO_MARKS }
+}
+
+/** Drop variable marks that no longer match (see marks.ts). Every action
+ *  ends with this, so an edit inside a variable turns it back into nodes. */
+function tidy(ws: Workspace): Workspace {
+  const marks = pruneMarks(ws.trees, ws.marks)
+  return marks === ws.marks ? ws : { ...ws, marks }
 }
 
 export function getTree(ws: Workspace, key: string | null): PlacedTree | undefined {
@@ -48,27 +63,47 @@ function update(ws: Workspace, key: string, f: (t: PlacedTree) => PlacedTree): W
 }
 
 /** Where a new tree goes: to the right of everything already there. */
-function nextFreeX(ws: Workspace, tree: Tree): number {
+function nextFreeX(ws: Workspace, tree: Tree, ids: IdTree, marks: Marks): number {
   if (ws.trees.length === 0) return 0
-  const right = Math.max(...ws.trees.map((t) => t.x + layoutTree(t.tree).bounds.maxX))
-  return right + TREE_GAP - layoutTree(tree).bounds.minX
+  const right = Math.max(...ws.trees.map((t) => t.x + layoutOf(t, ws.marks).bounds.maxX))
+  return right + TREE_GAP - layoutOf({ tree, ids }, marks).bounds.minX
 }
 
-export function addTree(ws: Workspace, tree: Tree, newId: IdSource, at?: { x: number; y: number }): Change {
+/** A tree's tidy layout, with its collapsed variables as single chips. */
+export function layoutOf(t: { tree: Tree; ids: IdTree }, marks: Marks) {
+  return layoutTree(t.tree, collapsedChips(t.ids, marks))
+}
+
+export function addTree(
+  ws: Workspace, tree: Tree, newId: IdSource, at?: { x: number; y: number }, marks: readonly PathMark[] = [],
+): Change {
   const key = `t${ws.nextKey}`
-  const placed: PlacedTree = { key, tree, ids: freshIds(tree, newId), x: at?.x ?? nextFreeX(ws, tree), y: at?.y ?? 0 }
-  return { ws: { trees: [...ws.trees, placed], selected: key, nextKey: ws.nextKey + 1 } }
+  const ids = freshIds(tree, newId)
+  const all = placeMarks(ids, marks, new Map(ws.marks))
+  const placed: PlacedTree = { key, tree, ids, x: at?.x ?? nextFreeX(ws, tree, ids, all), y: at?.y ?? 0 }
+  return { ws: tidy({ trees: [...ws.trees, placed], selected: key, nextKey: ws.nextKey + 1, marks: all }) }
+}
+
+/** Add a copied or typed tree, with its variables, as a new tree. */
+export function addFragment(ws: Workspace, frag: Fragment, newId: IdSource, at?: { x: number; y: number }): Change {
+  return addTree(ws, frag.tree, newId, at, frag.marks)
 }
 
 /** Swap in a different tree (e.g. typed in the input box): all-new nodes. */
-export function replaceTree(ws: Workspace, key: string, tree: Tree, newId: IdSource): Change {
-  return { ws: update(ws, key, (t) => ({ ...t, tree, ids: freshIds(tree, newId) })) }
+export function replaceTree(ws: Workspace, key: string, tree: Tree, newId: IdSource, marks: readonly PathMark[] = []): Change {
+  const ids = freshIds(tree, newId)
+  const next = update(ws, key, (t) => ({ ...t, tree, ids }))
+  return { ws: tidy({ ...next, marks: placeMarks(ids, marks, new Map(ws.marks)) }) }
+}
+
+function withoutTree(ws: Workspace, key: string): Workspace {
+  const trees = ws.trees.filter((t) => t.key !== key)
+  const selected = ws.selected === key ? (trees.at(-1)?.key ?? null) : ws.selected
+  return { ...ws, trees, selected }
 }
 
 export function removeTree(ws: Workspace, key: string): Change {
-  const trees = ws.trees.filter((t) => t.key !== key)
-  const selected = ws.selected === key ? (trees.at(-1)?.key ?? null) : ws.selected
-  return { ws: { ...ws, trees, selected } }
+  return { ws: tidy(withoutTree(ws, key)) }
 }
 
 export function selectTree(ws: Workspace, key: string): Workspace {
@@ -95,7 +130,7 @@ export function addLeafAt(ws: Workspace, key: string, path: Path, newId: IdSourc
     const s = step(r.tree)
     message += s ? ` It can now reduce: the next step is the ${s.rule} rule ${where(s.path)}.` : ''
   }
-  return { ws: selectTree(update(ws, key, (t) => ({ ...t, ...r })), key), message }
+  return { ws: tidy(selectTree(update(ws, key, (t) => ({ ...t, ...r })), key)), message }
 }
 
 /** Click in Remove mode: a branch disappears, or the whole tree if it's the root. */
@@ -104,7 +139,7 @@ export function removeAt(ws: Workspace, key: string, path: Path): Change {
   const placed = getTree(ws, key)!
   const r = removeBranch(placed.tree, placed.ids, path)
   return {
-    ws: selectTree(update(ws, key, (t) => ({ ...t, tree: r.tree, ids: r.ids })), key),
+    ws: tidy(selectTree(update(ws, key, (t) => ({ ...t, tree: r.tree, ids: r.ids })), key)),
     message: `Removed the branch ${where(path)}${r.died.size > 1 ? ` (${r.died.size} nodes)` : ''}.`,
   }
 }
@@ -115,12 +150,12 @@ export function joinTrees(ws: Workspace, source: string, target: string, path: P
   const from = getTree(ws, source)!
   const into = getTree(ws, target)!
   const r = attach(into.tree, into.ids, path, from.tree, from.ids)
-  const joined = update(removeTree(ws, source).ws, target, (t) => ({ ...t, ...r }))
+  const joined = update(withoutTree(ws, source), target, (t) => ({ ...t, ...r }))
   const node = subtreeAt(r.tree, path)
   const s = step(r.tree)
   let message = `Applied the node ${where(path)} to the dropped tree; it now has ${node.length} branches.`
   if (s) message += ` Next step: the ${s.rule} rule ${where(s.path)}.`
-  return { ws: { ...joined, selected: target }, message }
+  return { ws: tidy({ ...joined, selected: target }), message }
 }
 
 /** Tear the branch at `path` off into a tree of its own, rooted at (x, y). */
@@ -131,7 +166,7 @@ export function tearOff(ws: Workspace, key: string, path: Path, x: number, y: nu
   const torn: PlacedTree = { key: newKey, tree: d.sub, ids: d.subIds, x, y }
   const trees = [...update(ws, key, (t) => ({ ...t, tree: d.tree, ids: d.ids })).trees, torn]
   return {
-    ws: { trees, selected: newKey, nextKey: ws.nextKey + 1 },
+    ws: tidy({ ...ws, trees, selected: newKey, nextKey: ws.nextKey + 1 }),
     newKey,
     message: `Tore off the branch ${where(path)} as a tree of its own.`,
   }
@@ -147,8 +182,9 @@ export function stepTree(
   const s = at ? stepAt(placed.tree, at) : step(placed.tree)
   if (!s) return null
   const r = stepIds(placed.ids, s, newId)
+  const next = update(ws, key, (t) => ({ ...t, tree: s.tree, ids: r.ids }))
   return {
-    ws: update(ws, key, (t) => ({ ...t, tree: s.tree, ids: r.ids })),
+    ws: tidy({ ...next, marks: carryMarks(ws.marks, r.born) }),
     born: r.born,
     rule: s.rule,
     path: s.path,
@@ -158,4 +194,124 @@ export function stepTree(
 /** Every node id in the workspace (for checks). */
 export function allWorkspaceIds(ws: Workspace): string[] {
   return ws.trees.flatMap((t) => allIds(t.ids))
+}
+
+// --- Copy, paste and variables (milestone 9) ------------------------------------
+
+/** Paste `frag` onto the node at `path`: that node is applied to it, like a join. */
+export function pasteOnto(ws: Workspace, key: string, path: Path, frag: Fragment, newId: IdSource): Change {
+  const into = getTree(ws, key)!
+  const subIds = freshIds(frag.tree, newId)
+  const r = attach(into.tree, into.ids, path, frag.tree, subIds)
+  const next = update(ws, key, (t) => ({ ...t, ...r }))
+  const node = subtreeAt(r.tree, path)
+  const s = step(r.tree)
+  let message = `Pasted onto the node ${where(path)}: it is applied to the pasted tree and now has ${node.length} branches.`
+  if (s) message += ` Next step: the ${s.rule} rule ${where(s.path)}.`
+  return { ws: tidy({ ...next, selected: key, marks: placeMarks(subIds, frag.marks, new Map(ws.marks)) }), message }
+}
+
+/** Mark the subtree at `path` as variable `name` and collapse it to a chip. */
+export function nameAt(ws: Workspace, key: string, path: Path, name: string): Change {
+  const placed = getTree(ws, key)!
+  const node = idsAt(placed.ids, path)
+  const mark = { name, def: subtreeAt(placed.tree, path), expanded: false }
+  const marks = new Map(ws.marks).set(node.id, mark)
+  const absorbed = new Map(insideIds(node, mark).map((id) => [id, node.id]))
+  return { ws: tidy(selectTree({ ...ws, marks }, key)), absorbed, message: `Named this tree ${name}. Type ${name} or use the Add menu to make more.` }
+}
+
+/** Show a chip's insides. Its nodes sprout out of the chip. */
+export function expandChip(ws: Workspace, key: string, chipId: string): Change {
+  const placed = getTree(ws, key)!
+  const m = ws.marks.get(chipId)
+  if (!m) return { ws }
+  const node = findIds(placed.ids, chipId)!
+  const born = new Map(insideIds(node, m).map((id) => [id, chipId]))
+  return { ws: { ...ws, marks: setExpanded(ws.marks, [chipId], true) }, born, message: `Expanded ${m.name}.` }
+}
+
+/** Fold an expanded variable back into its chip. */
+export function collapseChip(ws: Workspace, key: string, chipId: string): Change {
+  const placed = getTree(ws, key)!
+  const m = ws.marks.get(chipId)
+  if (!m) return { ws }
+  const node = findIds(placed.ids, chipId)!
+  const absorbed = new Map(insideIds(node, m).map((id) => [id, chipId]))
+  return { ws: { ...ws, marks: setExpanded(ws.marks, [chipId], false) }, absorbed, message: `Collapsed ${m.name}.` }
+}
+
+/** Before reducing the redex at `path`: unfold the chips the rule must look
+ *  inside (see chipsToUnfold). Null if there are none. */
+export function unfoldFor(ws: Workspace, key: string, path: Path): (Change & { names: string[] }) | null {
+  const placed = getTree(ws, key)
+  if (!placed) return null
+  const chips = chipsToUnfold(placed.ids, ws.marks, path)
+  if (chips.length === 0) return null
+  const born = new Map<string, string>()
+  for (const id of chips) {
+    for (const inner of insideIds(findIds(placed.ids, id)!, ws.marks.get(id)!)) if (!born.has(inner)) born.set(inner, id)
+  }
+  return {
+    ws: { ...ws, marks: setExpanded(ws.marks, chips, true) },
+    born,
+    names: chips.map((id) => ws.marks.get(id)!.name),
+  }
+}
+
+function findIds(t: IdTree, id: string): IdTree | undefined {
+  if (t.id === id) return t
+  for (const c of t.children) {
+    const found = findIds(c, id)
+    if (found) return found
+  }
+  return undefined
+}
+
+// --- Keeping trees apart --------------------------------------------------------
+
+/** Space kept between a growing tree and the trees it pushes aside. */
+export const PUSH_GAP = 40
+
+type Box = { minX: number; maxX: number; minY: number; maxY: number }
+
+function boxOf(t: PlacedTree, marks: Marks): Box {
+  const b = layoutOf(t, marks).bounds
+  return { minX: b.minX + t.x, maxX: b.maxX + t.x, minY: b.minY + t.y, maxY: b.maxY + t.y }
+}
+
+/** Push the other trees sideways, out of the way of tree `key` (e.g. while it
+ *  grows during a reduction). Trees to its right move right, trees to its left
+ *  move left, and a pushed tree pushes the next one along. Trees only ever
+ *  move away: nothing is pulled back when `key` shrinks. */
+export function makeRoom(ws: Workspace, key: string): Workspace {
+  const me = getTree(ws, key)
+  if (!me || ws.trees.length < 2) return ws
+  const mine = boxOf(me, ws.marks)
+  const centre = (mine.minX + mine.maxX) / 2
+  const overlapsY = (a: Box, b: Box) => a.minY < b.maxY + PUSH_GAP && b.minY < a.maxY + PUSH_GAP
+  const moved = new Map<string, number>()   // key -> new x
+
+  for (const side of [1, -1] as const) {
+    const others = ws.trees
+      .filter((t) => t.key !== key)
+      .map((t) => ({ t, box: boxOf(t, ws.marks) }))
+      .filter(({ box }) => Math.sign((box.minX + box.maxX) / 2 - centre || 1) === side)
+      .sort((a, b) => side * (a.box.minX - b.box.minX))
+    const obstacles: Box[] = [mine]
+    for (const { t, box } of others) {
+      let shift = 0
+      for (const o of obstacles) {
+        if (!overlapsY(o, box)) continue
+        shift = side === 1
+          ? Math.max(shift, o.maxX + PUSH_GAP - box.minX)
+          : Math.max(shift, box.maxX - (o.minX - PUSH_GAP))
+      }
+      const dx = side * shift
+      if (dx !== 0) moved.set(t.key, t.x + dx)
+      obstacles.push({ ...box, minX: box.minX + dx, maxX: box.maxX + dx })
+    }
+  }
+  if (moved.size === 0) return ws
+  return { ...ws, trees: ws.trees.map((t) => (moved.has(t.key) ? { ...t, x: moved.get(t.key)! } : t)) }
 }

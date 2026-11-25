@@ -12,7 +12,6 @@
   --node: #2d2a33;
   --computation: #d9480f;
   --computation-light: #f78c4f;
-  --halo: rgba(217, 72, 15, 0.18);
   --accent: #5b4bd6;
   --error: #c92a2a;
   --shadow: 0 4px 18px rgba(20, 18, 30, 0.08);
@@ -34,7 +33,6 @@
     --node: #e6e4ea;
     --computation: #ff8a4c;
     --computation-light: #ffc29e;
-    --halo: rgba(255, 138, 76, 0.22);
     --accent: #9d91ff;
     --error: #ff6b6b;
     --shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
@@ -72,16 +70,9 @@ html, body {
 }
 
 .node .dot { fill: var(--node); }
-.node.computation .dot { fill: var(--computation); }
-
-/* The ring marks the redex ▶| will reduce next. */
-.node .halo {
-  display: none;
-  fill: var(--halo);
-  stroke: var(--computation);
-  stroke-width: 2;
-}
-.node.next-redex .halo { display: inline; }
+/* Every redex (a node a rule can fire at) gets a thin orange border. */
+.node.redex .dot,
+.node.redex .chip rect { stroke: var(--computation); stroke-width: 1.5; }
 
 /* Every redex has a K/S/F letter: click it to reduce that redex. */
 .node .badge { display: none; cursor: pointer; }
@@ -91,7 +82,12 @@ html, body {
   font: 700 9px ui-monospace, Menlo, monospace;
   user-select: none;
 }
+.node .badge rect { fill: transparent; }
 .node .badge:hover text { fill: var(--computation-light); }
+/* The redex ▶| will reduce next: its letter is white on an orange tag. */
+.node.next-redex .badge rect { fill: var(--computation); }
+.node.next-redex .badge text { fill: #fff; }
+.node.next-redex .badge:hover rect { fill: var(--computation-light); }
 
 /* Cursors say what a click will do. */
 #canvas[data-mode='add'] .node { cursor: copy; }
@@ -129,6 +125,27 @@ html, body {
   transition: transform var(--leave-ms, 350ms) ease-in;
 }
 .node.leaving .badge { display: none; }
+
+/* Variables (milestone 9): a collapsed variable is a chip with its name. */
+.node .chip { display: none; }
+.node.is-chip .chip { display: inline; }
+.node.is-chip .dot { display: none; }
+.node .chip rect {
+  fill: var(--accent);
+}
+.node .chip text {
+  fill: #fff;
+  font: 700 11px ui-monospace, Menlo, monospace;
+  pointer-events: none;
+}
+.node.dragging .chip rect,
+.node.drop-target .chip rect { stroke: var(--accent); stroke-width: 3; fill: color-mix(in srgb, var(--accent) 75%, #fff); }
+.node.leaving .chip {
+  transform: scale(0.3);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform var(--leave-ms, 350ms) ease-in;
+}
 
 /* --- Floating panels ------------------------------------------------------- */
 
@@ -223,6 +240,54 @@ button.active { background: var(--accent); border-color: var(--accent); color: #
 }
 .error:empty { display: none; }
 
+.status {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 4px 0 0;
+}
+.status:empty { display: none; }
+
+/* Variables in the Add menu: yours can be forgotten with the ×. */
+.examples button.var { font-family: ui-monospace, Menlo, monospace; font-weight: 650; color: var(--accent); }
+.examples .delete {
+  margin-left: 5px;
+  color: var(--muted);
+  font-weight: 400;
+}
+.examples .delete:hover { color: var(--error); }
+
+/* Right-click menu. */
+.context-menu {
+  position: fixed;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  min-width: 150px;
+}
+.context-menu[hidden] { display: none; }
+.context-menu button {
+  text-align: left;
+  border-color: transparent;
+  background: transparent;
+}
+.context-menu button:hover,
+.context-menu button:focus-visible { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.name-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px; max-width: 260px; }
+.name-form label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.85rem; }
+.name-form input {
+  width: 90px;
+  font-size: 0.95rem;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+.name-form button { border-color: var(--border); }
+.name-form .error { flex-basis: 100%; }
+
 /* Add / Remove / Move */
 .modes {
   display: inline-flex;
@@ -273,6 +338,15 @@ button.active { background: var(--accent); border-color: var(--accent); color: #
   font-size: 0.72rem;
   margin-bottom: 2px;
 }
+#notation-raw {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#notation-raw:empty { display: none; }
 #notation:empty::before { content: '\00a0'; }   /* keep the panel's height when empty */
 
 /* Bottom centre: playback, centred on the screen (the strip spans the

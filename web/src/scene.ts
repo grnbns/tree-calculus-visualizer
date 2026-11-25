@@ -36,8 +36,8 @@ import {
   type Bounds, type Camera, type Point, type Size,
 } from './camera'
 import {
-  COMPUTATION_RADIUS, HALO_RADIUS, NODE_RADIUS,
-  layoutTree, samePath, type NodeKind,
+  CHIP_HEIGHT, COMPUTATION_RADIUS, NODE_RADIUS,
+  chipWidth, layoutTree, samePath, type ChipsByPath, type NodeKind,
 } from './render'
 
 // --- Tuning ----------------------------------------------------------------
@@ -69,14 +69,14 @@ const MIN_SIBLING_GAP = 2 * NODE_RADIUS + 4
 const HARD_SIBLING_GAP = 2
 // How long vanishing nodes take to fade out at speed 1 (slower speeds fade
 // proportionally slower). style.css reads the actual value from --leave-ms.
-const LEAVE_MS = 350
+const LEAVE_MS = 0   // experiment: vanishing nodes and links go at once (was 350)
 
 // A press that moves less than this (screen pixels) is a click, not a drag.
 const CLICK_SLOP = 4
 // While carrying a tree, a node of another tree this close (SVG units) is the drop target.
 const DROP_RADIUS = 24
 // Where a redex's K/S/F badge sits: up and to the right of the node.
-const BADGE_OFFSET = 15
+const BADGE_OFFSET = 14
 
 // How long the camera takes to glide somewhere (ms).
 const GLIDE_MS = 450
@@ -91,6 +91,8 @@ export type SimNode = SimulationNodeDatum & {
   treeKey: string       // which workspace tree the node belongs to
   path: Path
   kind: NodeKind
+  /** name, if this node is a collapsed variable (drawn as a chip) */
+  chip?: string
   targetX: number
   targetY: number
   children: SimNode[]   // in branch order (first branch first)
@@ -196,9 +198,13 @@ export type SceneTree = {
   y: number
   nextRedex: Path | null // strongly ringed: what Step will reduce
   redexes?: readonly Redex[] // every redex: a clickable K/S/F badge
+  chips?: ChipsByPath    // collapsed variables, drawn as labelled chips
 }
 
 export type NodeHit = { treeKey: string; path: Path; shiftKey: boolean }
+
+/** A node (or empty canvas) under a screen point. */
+export type PointHit = { node: { treeKey: string; path: Path; id: string } | null; x: number; y: number }
 
 export type SceneEvents = {
   /** A press and release without moving: a click on a node. */
@@ -211,6 +217,8 @@ export type SceneEvents = {
   /** A whole tree (dragged by its root) was let go at (x, y), over `target`
    *  (a node of another tree) or over empty space (`target` null). */
   onDrop?: (drop: { treeKey: string; x: number; y: number; target: { treeKey: string; path: Path } | null }) => void
+  /** Right-click (or long press) on a node or on empty canvas. */
+  onContextMenu?: (hit: PointHit & { clientX: number; clientY: number }) => void
 }
 
 export class Scene {
@@ -272,7 +280,7 @@ export class Scene {
     this.sim = forceSimulation<SimNode, SimLink>([])
       .force('link', this.linkForce)
       .force('charge', this.charge)
-      .force('collide', forceCollide<SimNode>(COLLIDE_RADIUS))
+      .force('collide', forceCollide<SimNode>((n) => (n.chip ? chipWidth(n.chip) / 2 + 3 : COLLIDE_RADIUS)))
       .force('pullX', this.pullX)
       .force('pullY', this.pullY)
       .force('order', this.order)
@@ -417,6 +425,8 @@ export class Scene {
       born?: ReadonlyMap<string, string>
       /** trees to bring into view if they aren't (the camera glides) */
       reveal?: readonly string[]
+      /** vanishing node id -> node it shrinks into (collapsing a variable) */
+      absorbed?: ReadonlyMap<string, string>
     } = {},
   ): void {
     const born = options.born ?? new Map<string, string>()
@@ -427,7 +437,7 @@ export class Scene {
     this.treeBounds = new Map()
 
     for (const t of trees) {
-      const layout = layoutTree(t.tree)
+      const layout = layoutTree(t.tree, t.chips)
       this.treeBounds.set(t.key, {
         minX: layout.bounds.minX + t.x, maxX: layout.bounds.maxX + t.x,
         minY: layout.bounds.minY + t.y, maxY: layout.bounds.maxY + t.y,
@@ -471,14 +481,17 @@ export class Scene {
           const g = svgEl('g', { class: 'node' })
           g.dataset.id = id
           const badge = svgEl('g', { class: 'badge', transform: `translate(${BADGE_OFFSET},${-BADGE_OFFSET})` })
-          badge.append(svgEl('text', { 'text-anchor': 'middle', dy: '0.35em' }), svgEl('title'))
-          g.append(svgEl('circle', { class: 'halo', r: HALO_RADIUS }), svgEl('circle', { class: 'dot' }), svgEl('title'), badge)
+          badge.append(svgEl('rect', { x: -5.5, y: -6.5, width: 11, height: 13, rx: 3 }), svgEl('text', { 'text-anchor': 'middle', dy: '0.35em' }), svgEl('title'))
+          const chip = svgEl('g', { class: 'chip' })
+          chip.append(svgEl('rect', { height: CHIP_HEIGHT, y: -CHIP_HEIGHT / 2, rx: CHIP_HEIGHT / 2 }), svgEl('text', { 'text-anchor': 'middle', dy: '0.35em' }))
+          g.append(svgEl('circle', { class: 'dot' }), chip, svgEl('title'), badge)
           this.nodeEls.set(id, g)
           this.nodeLayer.append(g)
         }
         n.treeKey = t.key
         n.path = ln.path
         n.kind = ln.kind
+        n.chip = ln.chip
         n.targetX = targetX
         n.targetY = targetY
         n.children = []
@@ -500,10 +513,23 @@ export class Scene {
         if (this.dragging?.node.id === id) classes.push('dragging')
         if (otherTree) classes.push('dim')
         if (ln.path.length === 0) classes.push('root')
+        if (ln.chip) {
+          classes.push('is-chip')
+          const w = chipWidth(ln.chip)
+          const rect = g.querySelector('.chip rect')!
+          rect.setAttribute('width', String(w))
+          rect.setAttribute('x', String(-w / 2))
+          g.querySelector('.chip text')!.textContent = ln.chip
+        }
         g.setAttribute('class', classes.join(' '))
         g.querySelector('.dot')!.setAttribute('r', String(ln.kind === 'computation' ? COMPUTATION_RADIUS : NODE_RADIUS))
-        g.querySelector('title')!.textContent =
-          ln.path.length ? `${ln.kind} at [${ln.path.join(', ')}]` : `${ln.kind} (root)`
+        // The K/S/F badge sits up and to the right, outside a wide chip too.
+        const bx = ln.chip ? chipWidth(ln.chip) / 2 + 6 : BADGE_OFFSET
+        g.querySelector('.badge')!.setAttribute('transform', `translate(${bx},${-BADGE_OFFSET})`)
+        const where = ln.path.length ? `at [${ln.path.join(', ')}]` : '(root)'
+        g.querySelector('title')!.textContent = ln.chip
+          ? `variable ${ln.chip} ${where}: right-click to expand`
+          : `${ln.kind} ${where}`
       }
     }
 
@@ -512,7 +538,10 @@ export class Scene {
     // Nodes that are gone: out of the simulation now, off the screen after a fade.
     for (const id of old.keys()) {
       if (next.has(id)) continue
-      this.fadeOut(this.nodeEls.get(id)!)
+      const el = this.nodeEls.get(id)!
+      const into = next.get(options.absorbed?.get(id) ?? '')
+      if (into) this.slideTo(el, old.get(id)!, into)
+      this.fadeOut(el)
       this.nodeEls.delete(id)
       if (this.dragging?.node.id === id) this.endDrag()
       if (this.pressed?.node.id === id) this.pressed = null
@@ -540,7 +569,10 @@ export class Scene {
     }
     for (const id of this.links.keys()) {
       if (nextLinks.has(id)) continue
-      this.fadeOut(this.linkEls.get(id)!)
+      const line = this.linkEls.get(id)!
+      // A link whose node slides into a chip can't follow it: just vanish quickly.
+      if (options.absorbed?.has(id)) line.style.transition = 'opacity 120ms ease-out'
+      this.fadeOut(line)
       this.linkEls.delete(id)
     }
     this.links = nextLinks
@@ -570,6 +602,15 @@ export class Scene {
       this.sim.alpha(Math.max(this.sim.alpha(), 0.7))
       this.wake()
     }
+  }
+
+  /** Glide a vanishing node into another one (a variable collapsing). */
+  private slideTo(el: SVGElement, from: SimNode, to: SimNode): void {
+    if (reducedMotion()) return
+    el.style.transform = `translate(${from.x!.toFixed(2)}px, ${from.y!.toFixed(2)}px)`
+    el.getBoundingClientRect()   // start the transition from here
+    el.style.transition = `transform ${Math.round(this.leaveMs())}ms ease-in, opacity ${Math.round(this.leaveMs())}ms ease-out`
+    el.style.transform = `translate(${to.x!.toFixed(2)}px, ${to.y!.toFixed(2)}px)`
   }
 
   /** Fade an element out where it stands, then remove it. */
@@ -638,6 +679,15 @@ export class Scene {
     if (!m) return { x: 0, y: 0 }
     const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse())
     return { x: p.x, y: p.y }
+  }
+
+  /** What's under a screen point: a node (if any) and the world position. */
+  hitAt(clientX: number, clientY: number): PointHit {
+    const m = this.svg.getScreenCTM()
+    const p = m ? new DOMPoint(clientX, clientY).matrixTransform(m.inverse()) : { x: 0, y: 0 }
+    const g = document.elementFromPoint(clientX, clientY)?.closest<SVGGElement>('g.node')
+    const n = g && !g.classList.contains('leaving') && g.dataset.id ? this.nodes.get(g.dataset.id) : undefined
+    return { node: n ? { treeKey: n.treeKey, path: n.path, id: n.id } : null, x: p.x, y: p.y }
   }
 
   private hitOf(node: SimNode, shiftKey: boolean): NodeHit {
@@ -843,5 +893,11 @@ export class Scene {
     }
     this.svg.addEventListener('pointerup', release)
     this.svg.addEventListener('pointercancel', release)
+
+    this.svg.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      this.pressed = null
+      this.events.onContextMenu?.({ ...this.hitAt(e.clientX, e.clientY), clientX: e.clientX, clientY: e.clientY })
+    })
   }
 }

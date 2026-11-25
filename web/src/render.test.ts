@@ -48,3 +48,22 @@ describe('layoutTree', () => {
     expect(kindOf([[], [], []])).toBe('computation')
   })
 })
+
+describe('layout with collapsed variables', () => {
+  it('a chip is one node; only its arguments hang below it', () => {
+    const t = parse('△(△△)(△△)(△△△)')         // I applied to a fork
+    const chips = new Map([['', { name: 'I', arity: 2 }]])
+    const l = layoutTree(t, chips)
+    expect(l.nodes.map((n) => n.path.join('.'))).toEqual(['', '2', '2.0', '2.1'])
+    expect(l.nodes[0].chip).toBe('I')
+    expect(l.nodes[1].chip).toBeUndefined()
+  })
+
+  it('wide chips push their neighbours apart', () => {
+    const t = parse('△△△')
+    const narrow = layoutTree(t, new Map([['0', { name: 'V', arity: 0 }]]))
+    const wide = layoutTree(t, new Map([['0', { name: 'Swap1', arity: 0 }]]))
+    const gap = (l: ReturnType<typeof layoutTree>) => l.nodes[2].x - l.nodes[1].x
+    expect(gap(wide)).toBeGreaterThan(gap(narrow))
+  })
+})

@@ -7,17 +7,21 @@
 //
 // Pure functions, like workspace.ts.
 
-import { size, type Path, type Rule } from './engine'
+import { size, step, type Path, type Rule } from './engine'
 import { allIds, type IdSource } from './ids'
-import { getTree, stepTree, type Workspace } from './workspace'
+import { getTree, makeRoom, stepTree, unfoldFor, type Workspace } from './workspace'
 
 export type Frame = {
   ws: Workspace
   /** the step that led to this frame (none for frame 0) */
   rule?: Rule
   path?: Path
-  /** S-rule copies made by that step: new id -> origin id */
+  /** S-rule copies made by that step: new id -> origin id (for an unfold:
+   *  the chip's insides -> the chip) */
   born?: ReadonlyMap<string, string>
+  /** instead of a rule: these variables unfolded, because the next rule
+   *  needs to look inside them (milestone 9) */
+  unfold?: readonly string[]
 }
 
 export type Run = {
@@ -31,7 +35,7 @@ export const MAX_RUN_STEPS = 200
 /** ...or when the tree grows past this many nodes (S copies trees). */
 export const MAX_NODES = 1500
 
-export type Moved = { run: Run; born?: ReadonlyMap<string, string> }
+export type Moved = { run: Run; born?: ReadonlyMap<string, string>; absorbed?: ReadonlyMap<string, string> }
 export type Stopped = { stopped: 'normal' | 'limit' | 'size'; message: string }
 
 export function startRun(ws: Workspace, treeKey: string): Run {
@@ -53,11 +57,18 @@ export function forward(run: Run, newId: IdSource): Moved | Stopped {
   return reduce(run, newId)
 }
 
+/** How many rule steps (not unfolds) lead up to frame `pos`. */
+export function stepsBefore(run: Run, pos = run.pos): number {
+  return run.frames.slice(1, pos + 1).filter((f) => f.rule).length
+}
+
 /** Reduce the selected tree (at `at`, or leftmost-outermost), dropping any
- *  frames after the current one first. */
+ *  frames after the current one first. If the rule needs to look inside a
+ *  collapsed variable, this records two frames: the unfold, then the step;
+ *  and moves to the unfold (the next `forward` shows the step). */
 export function reduce(run: Run, newId: IdSource, at?: Path): Moved | Stopped {
   const ws = currentWs(run)
-  const steps = run.pos
+  const steps = stepsBefore(run)
   if (steps >= MAX_RUN_STEPS) {
     return { stopped: 'limit', message: `Stopped after ${steps} steps: this tree may never reach a normal form.` }
   }
@@ -65,26 +76,43 @@ export function reduce(run: Run, newId: IdSource, at?: Path): Moved | Stopped {
   if (tree && size(tree) > MAX_NODES) {
     return { stopped: 'size', message: `Stopped: the tree has grown past ${MAX_NODES} nodes.` }
   }
-  const s = stepTree(ws, run.treeKey, newId, at)
+  const path = at ?? (tree && step(tree)?.path)
+  const unfold = path ? unfoldFor(ws, run.treeKey, path) : null
+  // A growing tree pushes the other trees aside instead of overlapping them.
+  const unfolded = unfold && makeRoom(unfold.ws, run.treeKey)
+  const s = path ? stepTree(unfolded ?? ws, run.treeKey, newId, path) : null
   if (!s) {
     return {
       stopped: 'normal',
       message: steps ? `Reached a normal form after ${steps} step${steps === 1 ? '' : 's'}.` : 'Nothing to reduce: this tree is a value.',
     }
   }
-  const frames = [...run.frames.slice(0, run.pos + 1), { ws: s.ws, rule: s.rule, path: s.path, born: s.born }]
-  return { run: { ...run, frames, pos: frames.length - 1 }, born: s.born }
+  const added: Frame[] = []
+  if (unfold && unfolded) added.push({ ws: unfolded, unfold: unfold.names, born: unfold.born })
+  added.push({ ws: makeRoom(s.ws, run.treeKey), rule: s.rule, path: s.path, born: s.born })
+  const frames = [...run.frames.slice(0, run.pos + 1), ...added]
+  return { run: { ...run, frames, pos: run.pos + 1 }, born: added[0].born }
+}
+
+/** Stepping back over unfolds: the chips' insides fold back into them. */
+function absorbedBetween(run: Run, to: number): Map<string, string> {
+  const absorbed = new Map<string, string>()
+  for (let i = run.pos; i > to; i--) {
+    const f = run.frames[i]
+    if (f.unfold) for (const [inner, chip] of f.born ?? []) absorbed.set(inner, chip)
+  }
+  return absorbed
 }
 
 export function back(run: Run): Moved | null {
-  return run.pos > 0 ? { run: { ...run, pos: run.pos - 1 } } : null
+  return run.pos > 0 ? { run: { ...run, pos: run.pos - 1 }, absorbed: absorbedBetween(run, run.pos - 1) } : null
 }
 
 /** Jump to frame `pos`. Nodes copied along the way sprout from the oldest
  *  ancestor still on screen, so a big jump still animates sensibly. */
 export function seek(run: Run, pos: number): Moved {
   pos = Math.max(0, Math.min(pos, run.frames.length - 1))
-  if (pos <= run.pos) return { run: { ...run, pos } }
+  if (pos <= run.pos) return { run: { ...run, pos }, absorbed: absorbedBetween(run, pos) }
   const onScreen = new Set(getTree(currentWs(run), run.treeKey) ? allIds(getTree(currentWs(run), run.treeKey)!.ids) : [])
   const merged = new Map<string, string>()
   for (let i = run.pos + 1; i <= pos; i++) for (const [k, v] of run.frames[i].born ?? []) merged.set(k, v)
@@ -102,6 +130,7 @@ export function describeFrame(run: Run, i = run.pos): string {
   const total = run.frames.length - 1
   if (i === 0) return `Start (${total} step${total === 1 ? '' : 's'} recorded)`
   const f = run.frames[i]
+  if (f.unfold) return `Step ${i} of ${total}: unfold ${f.unfold.join(', ')}, because the next rule looks inside`
   const where = f.path && f.path.length ? `at [${f.path.join(', ')}]` : 'at the root'
   return `Step ${i} of ${total}: ${f.rule} rule ${where}`
 }

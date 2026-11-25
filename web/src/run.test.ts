@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { atEnd, back, currentWs, describeFrame, forward, reduce, seek, startRun, MAX_RUN_STEPS, type Moved, type Run, type Stopped } from './run'
-import { addTree, emptyWorkspace, getTree } from './workspace'
+import { atEnd, back, currentWs, describeFrame, forward, reduce, seek, startRun, stepsBefore, MAX_RUN_STEPS, type Moved, type Run, type Stopped } from './run'
+import { addFragment, addTree, emptyWorkspace, getTree } from './workspace'
 import { allIds, idSource } from './ids'
-import { parse, I } from './parser'
+import { parse, parseNamed, I } from './parser'
 
 const moved = (r: Moved | Stopped): Moved => {
   if ('stopped' in r) throw new Error(r.message)
@@ -88,5 +88,52 @@ describe('a reduction run', () => {
     run = moved(forward(run, newId)).run
     expect(describeFrame(run)).toBe('Step 1 of 1: S rule at the root')
     expect(describeFrame(run, 0)).toBe('Start (1 step recorded)')
+  })
+})
+
+describe('runs with variables (milestone 9)', () => {
+  function setupNamed(text: string) {
+    const newId = idSource()
+    const ws = addFragment(emptyWorkspace(), parseNamed(text), newId).ws
+    return { newId, run: startRun(ws, 't1') }
+  }
+
+  it('an unfold is its own frame, before the step that needs it', () => {
+    let { newId, run } = setupNamed('K I D')
+    run = moved(forward(run, newId)).run
+    expect(run.frames[1].unfold).toEqual(['K'])
+    expect(describeFrame(run)).toBe('Step 1 of 2: unfold K, because the next rule looks inside')
+    expect(treeOf(run)).toEqual(parse('K I D'))          // unfolding changes no tree
+    run = moved(forward(run, newId)).run
+    expect(run.frames[2].rule).toBe('K')
+    expect(treeOf(run)).toEqual(parse(I))
+    expect(stepsBefore(run)).toBe(1)
+  })
+
+  it('stepping back over an unfold folds the insides back into the chip', () => {
+    let { newId, run } = setupNamed('K I D')
+    run = moved(forward(run, newId)).run
+    const m = moved(back(run)!)
+    expect(m.absorbed!.size).toBeGreaterThan(0)
+    expect(new Set(m.absorbed!.values()).size).toBe(1)
+  })
+
+  it('a clicked redex inside a chip unfolds it, then reduces that redex', () => {
+    // K applied to a redex: the K △ △ in the argument is clicked
+    let { newId, run } = setupNamed('I (K △ △)')
+    run = moved(reduce(run, newId, [2])).run
+    expect(run.frames[1].unfold).toEqual(['K'])
+    run = moved(forward(run, newId)).run
+    expect(run.frames[2]).toMatchObject({ rule: 'K', path: [2] })
+  })
+
+  it('S K K x: plays to x, counting only rule steps in the message', () => {
+    let { newId, run } = setupNamed('S K K (△△)')
+    let r = forward(run, newId)
+    while (!('stopped' in r)) { run = r.run; r = forward(run, newId) }
+    expect(treeOf(run)).toEqual(parse('△△'))
+    const steps = run.frames.filter((f) => f.rule).length
+    expect(run.frames.some((f) => f.unfold)).toBe(true)
+    expect(r.message).toBe(`Reached a normal form after ${steps} steps.`)
   })
 })
