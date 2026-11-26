@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import rawCases from '../../tests/cases.json'
 import type { Tree } from './engine'
-import { BUILTIN_TEXT, parse } from './parser'
+import { BUILTIN_TEXT, parse, parseNamed } from './parser'
 import { chipWidth, layoutTree } from './render'
 import {
   BADGE_MARGIN, BOOK_EDGE, CHILD_ORDER, VIEWS, badgeOffset, findClashes, halfSize, isView, laterward, layoutFor, nextView,
-  orderAngle, segmentsCross, tagOffset, turnBetween, widestGap, type View, type ViewLayout,
+  orderAngle, placeTags, segmentsCross, tagOffset, turnBetween, widestGap, type View, type ViewLayout,
 } from './views'
 
 const cases = rawCases as unknown as { name: string; input: Tree; steps: { tree: Tree }[] }[]
@@ -131,11 +131,10 @@ describe('views', () => {
     expect(segmentsCross(p(0, 0), p(1, 0), p(0, 1), p(1, 1))).toBe(false)
   })
 
-  it('Organic: the root is at the top, and edges keep the book length unless they had to grow', () => {
+  it('Organic: edges keep the book length unless they had to grow, and never grow much', () => {
     let exact = 0, all = 0
     for (const t of TREES) {
       const l = layoutFor('organic', t)
-      for (const n of l.nodes) expect(n.y).toBeGreaterThanOrEqual(-1e-9)
       for (const { source, target } of l.links) {
         if (source.chip || target.chip) continue
         all++
@@ -145,10 +144,12 @@ describe('views', () => {
       }
     }
     expect(exact / all).toBeGreaterThan(0.5)
-    // The book's own trees need no help: every edge is the book length.
+    for (const t of TREES) for (const { source, target } of layoutFor('organic', t).links) expect(dist(source, target)).toBeLessThan(BOOK_EDGE * 5)
+    // The book's own trees need no help: every edge is the book length, and they grow downward.
     for (const name of ['and', 'or', 'implies', 'not', 'iff']) {
       const l = layoutFor('organic', parse(BUILTIN_TEXT[name]))
       for (const { source, target } of l.links) expect(dist(source, target)).toBeCloseTo(BOOK_EDGE, 6)
+      for (const n of l.nodes) expect(n.y).toBeGreaterThanOrEqual(-1e-9)
     }
   })
 
@@ -231,6 +232,40 @@ describe('badges and tags', () => {
         for (const m of l.nodes) {
           if (m === spots[i].n) continue
           expect(Math.hypot(spots[i].x - m.x, spots[i].y - m.y)).toBeGreaterThan(halfSize(m).hx + 5)
+        }
+      }
+    }
+  })
+
+  it('Organic: name tags of expanded variables never overlap each other, a badge or a node', () => {
+    for (const name of ['isLeaf', 'iff', 'not', 'isZero', 'pred']) {
+      // Every variable inside the definition expanded, each with its name tag.
+      const p = parseNamed(BUILTIN_TEXT[name])
+      const l = layoutFor('organic', p.tree)
+      const width = (s: string) => 8 + Math.min(s.length, 12) * 5.6
+      const tags = new Map(p.marks.map((m) => [m.path.join('.'), width(m.mark.name)] as const))
+      const badges = new Set(l.nodes.filter((_, i) => i % 3 === 0).map((n) => n.path.join('.')))   // some badges too
+      const spots = placeTags(l, tags, badges)
+      const boxes = [...spots].map(([k, o]) => {
+        const n = l.nodes.find((m) => m.path.join('.') === k)!
+        return { x: n.x + o.x, y: n.y + o.y, hw: tags.get(k)! / 2, hh: 6, n }
+      })
+      for (const n of l.nodes) {
+        if (!badges.has(n.path.join('.'))) continue
+        const o = badgeOffset(n)
+        boxes.push({ x: n.x + o.x, y: n.y + o.y, hw: 5.5, hh: 6.5, n })
+      }
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          const a = boxes[i], b = boxes[j]
+          expect(Math.abs(a.x - b.x) >= a.hw + b.hw || Math.abs(a.y - b.y) >= a.hh + b.hh).toBe(true)
+        }
+      }
+      for (const b of boxes.slice(0, spots.size)) {
+        for (const m of l.nodes) {
+          if (m === b.n) continue
+          const dx = Math.max(Math.abs(m.x - b.x) - b.hw, 0), dy = Math.max(Math.abs(m.y - b.y) - b.hh, 0)
+          expect(Math.hypot(dx, dy)).toBeGreaterThan(halfSize(m).hx)
         }
       }
     }

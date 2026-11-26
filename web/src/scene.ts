@@ -41,7 +41,7 @@ import {
   chipLabel, chipWidth, samePath, type ChipsByPath, type NodeKind,
 } from './render'
 import {
-  CHILD_ORDER, PULL_SCALE, badgeOffset, laterward, layoutFor, orderAngle, tagOffset, turnBetween, type View,
+  CHILD_ORDER, PULL_SCALE, badgeOffset, laterward, layoutFor, orderAngle, placeTags, tagOffset, turnBetween, type View,
 } from './views'
 
 // --- Tuning ----------------------------------------------------------------
@@ -577,6 +577,13 @@ export class Scene {
 
     for (const t of trees) {
       const layout = layoutFor(this.view, t.tree, t.chips)
+      // Name tags of expanded variables, placed clear of everything else.
+      const tagWidth = (name: string) => 8 + chipLabel(name).length * 5.6
+      const tagSpots = placeTags(
+        layout,
+        new Map([...(t.openVars ?? [])].map(([k, v]) => [k, tagWidth(v.name)])),
+        new Set((t.redexes ?? []).map((r) => r.path.join('.'))),
+      )
       const order = CHILD_ORDER[this.view]
       this.treeBounds.set(t.key, {
         minX: layout.box.minX + t.x, maxX: layout.box.maxX + t.x,
@@ -676,9 +683,9 @@ export class Scene {
         const open = t.openVars?.get(ln.path.join('.'))
         g.classList.toggle('open-var', !!open)
         if (open) {
-          const tw = 8 + chipLabel(open.name).length * 5.6
+          const tw = tagWidth(open.name)
           const tag = g.querySelector('.open-tag')!
-          const at = tagOffset(ln, tw)
+          const at = tagSpots.get(ln.path.join('.')) ?? tagOffset(ln, tw)
           tag.setAttribute('transform', `translate(${at.x.toFixed(1)},${at.y.toFixed(1)})`)
           const rect = tag.querySelector('rect')!
           rect.setAttribute('width', String(tw))

@@ -124,132 +124,243 @@ export function halfSize(n: { kind: LaidOutNode['kind']; chip?: string }): { hx:
 // --- Organic (as the book draws trees) ---------------------------------------
 //
 // The figures in *Reflective Programs in Tree Calculus* follow a few simple
-// rules: every edge is the same length; the root is at the top; a stem's one
-// branch carries straight on in the direction it came from; and a fork's
-// branches open about 60° apart, balanced like a mobile, so the heavier
-// branch bends less and the lighter one more (a leaf beside a big subtree
-// swings well out to the side, the big subtree carries almost straight on).
+// rules: every edge is the same length; a stem's one branch carries straight
+// on in the direction it came from; and a fork's branches open about 60°
+// apart, balanced like a mobile, so the heavier branch bends less and the
+// lighter one more (a leaf beside a big subtree swings well out to the side,
+// the big subtree carries almost straight on). In the book's big trees the
+// side branches hug their stem and the stems meander, sideways or even
+// upward, wherever there's room; edges are never stretched.
 //
-// Bigger trees (reductions grow them) can then cross themselves. So the
-// layout is checked: wherever two edges cross, or a node sits on an edge or
-// too close to another node, the fork where those two branches part is
-// opened wider (or, once it's as wide as it goes, its branches are made
-// longer), and the tree is laid out again, until nothing crosses. Trees
-// that don't crowd come out exactly as the book draws them.
+// So the layout is built bottom-up. Each subtree is laid out first, as a
+// fixed shape (its own branches already clear of each other). A node then
+// places its branches' shapes at the book's angles; only if two of them
+// would clash (edges crossing, a node on an edge, nodes too close), or one
+// would hit the node or the edge coming into it, does it open the angle
+// between them, a little at a time, as far as needed. Only if even the
+// widest fan doesn't fit are that node's own edges made longer. Every edge
+// is checked against everything it could meet at some level, so the whole
+// tree comes out with no crossings.
 
 /** Every edge is this long (between two dots; chips add their extra width). */
 export const BOOK_EDGE = 36
-/** Angle between neighbouring branches of one node (narrower for many). */
+/** Angle between neighbouring branches of one node, narrower for many (all
+ *  of them within BOOK_FAN), before any opening up. */
 const BRANCH_GAP = Math.PI / 3
+const BOOK_FAN = (150 * Math.PI) / 180
+/** A crowded node's branches may open this far in all, round toward the
+ *  back (the root, with no edge coming in, a little further). */
 const MAX_FAN = (150 * Math.PI) / 180
-/** Branches point at least this far below the horizontal (they never grow upward). */
-const LOWEST = (15 * Math.PI) / 180
+const MAX_ROOT_FAN = (330 * Math.PI) / 180
+/** How much a crowded fan opens per try, and how much the edges grow when
+ *  even the widest fan doesn't fit. */
+const OPEN_STEP = (5 * Math.PI) / 180
+const LENGTHEN = 1.15
 /** Room kept between two nodes, and between a node and an edge it isn't on. */
 const NODE_CLEARANCE = 12
 const EDGE_CLEARANCE = 6
-/** How much a crowded fork opens, or its branches grow, per round. */
-const WIDEN = 1.2
-const LENGTHEN = 1.15
-const MAX_ROUNDS = 80
 
-type Book = {
-  kids: Map<ViewNode, ViewNode[]>
-  parent: Map<ViewNode, ViewNode>
-  weight: Map<ViewNode, number>
-  /** per node: how much wider than the book its branches open (1 = as the book) */
-  widen: Map<ViewNode, number>
-  /** per node: how much longer than the book its branches are */
-  lengthen: Map<ViewNode, number>
-}
+/** How far behind a node its incoming edge is kept clear (longer than any edge). */
+const BEHIND = 1e5
+
+/** A laid-out subtree in its own frame: its root at (0, 0), and the edge
+ *  coming into it from above (+y is "onward", the way that edge points).
+ *  pts[i] belongs to nodes[i]; edges are index pairs. */
+type Shape = { nodes: ViewNode[]; x: number[]; y: number[]; edges: [number, number][] }
 
 function toBook(nodes: ViewNode[], links: ViewLayout['links']): void {
   const kids = new Map<ViewNode, ViewNode[]>(nodes.map((n) => [n, []]))
-  const parent = new Map<ViewNode, ViewNode>()
-  for (const l of links) {
-    kids.get(l.source)!.push(l.target)
-    parent.set(l.target, l.source)
-  }
+  for (const l of links) kids.get(l.source)!.push(l.target)
   // How heavy each subtree is (its node count). `nodes` lists parents first.
   const weight = new Map<ViewNode, number>()
   for (let i = nodes.length - 1; i >= 0; i--) {
     weight.set(nodes[i], 1 + kids.get(nodes[i])!.reduce((sum, c) => sum + weight.get(c)!, 0))
   }
-  const book: Book = { kids, parent, weight, widen: new Map(), lengthen: new Map() }
+  // Children before parents, so every child's shape is ready.
+  const shapes = new Map<ViewNode, Shape>()
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const n = nodes[i]
+    shapes.set(n, shapeOf(n, kids.get(n)!.map((c) => shapes.get(c)!), kids.get(n)!.map((c) => weight.get(c)!), i === 0))
+    for (const c of kids.get(n)!) shapes.delete(c)   // no longer needed
+  }
+  // The root's shape points down from (0, 0): that's the layout.
+  const root = shapes.get(nodes[0])!
+  root.nodes.forEach((n, i) => { n.x = root.x[i]; n.y = root.y[i] })
+}
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    placeBook(nodes[0], book)
-    const clashes = findClashes(nodes, links)
-    if (clashes.length === 0) return
-    // Fix each fork at most once per round: its whole subtree moves anyway.
-    const fixed = new Set<ViewNode>()
-    for (const [a, b] of clashes) {
-      const { fork, aSide, bSide } = whereTheyPart(a, b, book)
-      if (fixed.has(fork)) continue
-      fixed.add(fork)
-      const k = kids.get(fork)!.length
-      if (aSide && bSide && k > 1 && gapOf(fork, book) * (k - 1) < MAX_FAN - 1e-9) {
-        book.widen.set(fork, (book.widen.get(fork) ?? 1) * WIDEN)
-      } else {
-        book.lengthen.set(fork, (book.lengthen.get(fork) ?? 1) * LENGTHEN)
-      }
+/** Lay out node n with its children's shapes, by the book's rules. Where
+ *  two branches clash, the gaps between them open a little (only those
+ *  gaps, so big branches get more room and small ones keep theirs); if the
+ *  whole fan is as wide as it may go, the edges grow instead. */
+function shapeOf(n: ViewNode, children: Shape[], weights: number[], isRoot: boolean): Shape {
+  const k = children.length
+  if (k === 0) return { nodes: [n], x: [0], y: [0], edges: [] }
+  const total = weights.reduce((a, b) => a + b, 0)
+  const maxFan = isRoot ? MAX_ROOT_FAN : MAX_FAN
+  const gaps = Array.from({ length: k - 1 }, () => Math.min(BRANCH_GAP, BOOK_FAN / Math.max(k - 1, 1)))
+  // How much longer than the book each branch's edge is (only the branches
+  // that have to be pushed out grow, so small ones stay close).
+  const stretch = children.map(() => 1)
+  const lay = () => {
+    // Where each branch points: first on the left (seen going onward), gaps
+    // between them, turned so that their weights balance on "onward".
+    const offsets = [0]
+    for (const g of gaps) offsets.push(offsets[offsets.length - 1] + g)
+    const first = Math.PI / 2 + weights.reduce((sum, w, i) => sum + w * offsets[i], 0) / total
+    return children.map((c, i) => place(c, first - offsets[i], edgeLength(n, c.nodes[0]) * stretch[i]))
+  }
+  for (let tries = 0; tries < 400; tries++) {
+    const placed = lay()
+    const clash = clashAt(n, placed, isRoot, weights)
+    if (!clash) return join(n, placed)
+    const fan = gaps.reduce((a, b) => a + b, 0)
+    if (clash.length === 2 && fan + OPEN_STEP <= maxFan) {
+      // Open the gaps between the two clashing branches, shared out.
+      const [i, j] = clash
+      for (let m = i; m < j; m++) gaps[m] += OPEN_STEP / (j - i)
+    } else {
+      // Push a branch further out: the one that hit the node; or, of the
+      // two, the one pushed out less so far (the heavier one first: further
+      // out, it takes less angle). So small branches stay close unless they
+      // too are in the way.
+      const [p, q] = clash.length === 1 ? [clash[0], clash[0]] : clash
+      const i = stretch[p] !== stretch[q] ? (stretch[p] < stretch[q] ? p : q) : (weights[p] >= weights[q] ? p : q)
+      stretch[i] *= LENGTHEN
     }
   }
-  placeBook(nodes[0], book)   // gave up: keep the last try (very crowded trees only)
+  return join(n, lay())   // gave up (a very crowded node): the last try
 }
 
-/** The angle between neighbouring branches of a node. */
-function gapOf(n: ViewNode, book: Book): number {
-  const k = book.kids.get(n)!.length
-  if (k < 2) return 0
-  return Math.min(BRANCH_GAP * (book.widen.get(n) ?? 1), MAX_FAN / (k - 1))
+function edgeLength(a: ViewNode, b: ViewNode): number {
+  return BOOK_EDGE + Math.max(0, halfSize(a).hx - NODE_RADIUS) + Math.max(0, halfSize(b).hx - NODE_RADIUS)
 }
 
-/** Lay the tree out by the book's rules, from the root down. (A loop, not
- *  recursion: chains can be long.) */
-function placeBook(root: ViewNode, book: Book): void {
-  const edge = (a: ViewNode, b: ViewNode) =>
-    (BOOK_EDGE + Math.max(0, halfSize(a).hx - NODE_RADIUS) + Math.max(0, halfSize(b).hx - NODE_RADIUS))
-    * (book.lengthen.get(a) ?? 1)
-  root.x = 0
-  root.y = 0
-  const todo: [ViewNode, number][] = [[root, Math.PI / 2]]
-  while (todo.length) {
-    const [n, dir] = todo.pop()!
-    const c = book.kids.get(n)!
-    if (c.length === 0) continue
-    // Branches `gap` apart, first branch on the left (as seen going along
-    // `dir`), turned so that their weights balance on `dir`.
-    const gap = gapOf(n, book)
-    const total = c.reduce((sum, k) => sum + book.weight.get(k)!, 0)
-    let first = dir + (gap * c.reduce((sum, k, i) => sum + book.weight.get(k)! * i, 0)) / total
-    // Never grow upward: turn the whole fan back below the horizontal.
-    const last = first - gap * (c.length - 1)
-    if (first > Math.PI - LOWEST) first = Math.PI - LOWEST
-    else if (last < LOWEST) first += LOWEST - last
-    c.forEach((k, i) => {
-      const a = first - gap * i
-      const len = edge(n, k)
-      k.x = n.x + len * Math.cos(a)
-      k.y = n.y + len * Math.sin(a)
-      todo.push([k, a])
+/** A child's shape turned to point at angle `dir` and moved out to `len`
+ *  from the parent (at the origin). The parent's point is added as index
+ *  -1's stand-in: the edge to it is [parentIndex, 0] with parentIndex = len. */
+type Placed = Shape & { len: number }
+function place(c: Shape, dir: number, len: number): Placed {
+  const turn = dir - Math.PI / 2
+  const cos = Math.cos(turn)
+  const sin = Math.sin(turn)
+  const ox = len * Math.cos(dir)
+  const oy = len * Math.sin(dir)
+  const x = c.x.map((px, i) => ox + px * cos - c.y[i] * sin)
+  const y = c.x.map((px, i) => oy + px * sin + c.y[i] * cos)
+  return { nodes: c.nodes, x, y, edges: c.edges, len }
+}
+
+/** The node itself at the origin, its branches' shapes around it. */
+function join(n: ViewNode, placed: Placed[]): Shape {
+  const out: Shape = { nodes: [n], x: [0], y: [0], edges: [] }
+  for (const p of placed) {
+    const offset = out.nodes.length
+    out.edges.push([0, offset])
+    out.nodes.push(...p.nodes)
+    out.x.push(...p.x)
+    out.y.push(...p.y)
+    for (const [a, b] of p.edges) out.edges.push([a + offset, b + offset])
+  }
+  return out
+}
+
+const radiusOf = (n: ViewNode) => halfSize(n).hx
+
+/** Which branches (placed around node n at the origin) clash: two of them
+ *  ([i, j], i < j; the heaviest such pair, so big branches get the room
+ *  first and small ones are the ones pushed out), or one with n or with the
+ *  edge coming into n from behind ([i]); null if none. */
+function clashAt(n: ViewNode, placed: Placed[], isRoot: boolean, weights: readonly number[]): number[] | null {
+  const origin = { x: 0, y: 0 }
+  // The edge into n comes from straight "behind". Its parent may yet push n
+  // further out, so the whole line behind n is kept clear, not just BOOK_EDGE.
+  const above = isRoot ? origin : { x: 0, y: -BEHIND }
+  for (let pi = 0; pi < placed.length; pi++) {
+    const p = placed[pi]
+    const hit = () => [pi]
+    // the branch against n itself and the edge into n
+    for (let i = 0; i < p.nodes.length; i++) {
+      const pt = { x: p.x[i], y: p.y[i] }
+      if (i > 0 && Math.hypot(pt.x, pt.y) < radiusOf(p.nodes[i]) + radiusOf(n) + NODE_CLEARANCE) return hit()
+      if (!isRoot && pointToSegment(pt, origin, above) < radiusOf(p.nodes[i]) + EDGE_CLEARANCE) return hit()
+    }
+    for (const [a, b] of p.edges) {
+      const pa = { x: p.x[a], y: p.y[a] }, pb = { x: p.x[b], y: p.y[b] }
+      if (!isRoot && segmentsCross(pa, pb, origin, above)) return hit()
+      if (pointToSegment(origin, pa, pb) < radiusOf(n) + EDGE_CLEARANCE) return hit()
+    }
+  }
+  const pairs: [number, number][] = []
+  for (let i = 0; i < placed.length; i++) for (let j = i + 1; j < placed.length; j++) pairs.push([i, j])
+  pairs.sort((a, b) => weights[b[0]] + weights[b[1]] - (weights[a[0]] + weights[a[1]]))
+  for (const [i, j] of pairs) if (shapesClash(placed[i], placed[j])) return [i, j]
+  return null
+}
+
+/** Do two branches of the same node clash? Each includes the edge from the
+ *  node (at the origin) to its own root. */
+function shapesClash(A: Placed, B: Placed): boolean {
+  // Quick reject: far apart boxes can't clash.
+  const box = (P: Placed) => ({ minX: Math.min(0, ...P.x), maxX: Math.max(0, ...P.x), minY: Math.min(0, ...P.y), maxY: Math.max(0, ...P.y) })
+  const a = box(A), b = box(B)
+  const pad = 2 * BOOK_EDGE
+  if (a.maxX + pad < b.minX || b.maxX + pad < a.minX || a.maxY + pad < b.minY || b.maxY + pad < a.minY) return false
+
+  // A grid of A's nodes and edges (its edge from the origin included).
+  const CELL = BOOK_EDGE * 1.5
+  const grid = new Map<string, { nodes: number[]; edges: [Pt, Pt][] }>()
+  const cell = (i: number, j: number) => {
+    const key = i + ',' + j
+    let c = grid.get(key)
+    if (!c) grid.set(key, (c = { nodes: [], edges: [] }))
+    return c
+  }
+  const cellsOf = (x0: number, x1: number, y0: number, y1: number, f: (i: number, j: number) => void) => {
+    for (let i = Math.floor(x0 / CELL); i <= Math.floor(x1 / CELL); i++) for (let j = Math.floor(y0 / CELL); j <= Math.floor(y1 / CELL); j++) f(i, j)
+  }
+  const edgesOf = (P: Placed): [Pt, Pt][] => [
+    [{ x: 0, y: 0 }, { x: P.x[0], y: P.y[0] }],
+    ...P.edges.map(([u, v]): [Pt, Pt] => [{ x: P.x[u], y: P.y[u] }, { x: P.x[v], y: P.y[v] }]),
+  ]
+  const R = NODE_CLEARANCE + 30   // more than any node's reach (chips included)
+  A.nodes.forEach((_, i) => cellsOf(A.x[i] - R, A.x[i] + R, A.y[i] - R, A.y[i] + R, (u, v) => cell(u, v).nodes.push(i)))
+  for (const e of edgesOf(A)) {
+    cellsOf(Math.min(e[0].x, e[1].x) - R, Math.max(e[0].x, e[1].x) + R, Math.min(e[0].y, e[1].y) - R, Math.max(e[0].y, e[1].y) + R, (u, v) => cell(u, v).edges.push(e))
+  }
+  const at = (x: number, y: number) => grid.get(Math.floor(x / CELL) + ',' + Math.floor(y / CELL))
+  const atOrigin = (p: Pt) => Math.abs(p.x) < 1e-9 && Math.abs(p.y) < 1e-9
+
+  // B's nodes against A's nodes and edges.
+  for (let i = 0; i < B.nodes.length; i++) {
+    const c = at(B.x[i], B.y[i])
+    if (!c) continue
+    const p = { x: B.x[i], y: B.y[i] }
+    const rb = radiusOf(B.nodes[i])
+    for (const j of c.nodes) if (Math.hypot(p.x - A.x[j], p.y - A.y[j]) < rb + radiusOf(A.nodes[j]) + NODE_CLEARANCE) return true
+    for (const [u, v] of c.edges) if (pointToSegment(p, u, v) < rb + EDGE_CLEARANCE) return true
+  }
+  // B's edges against A's nodes and edges.
+  for (const [u, v] of edgesOf(B)) {
+    const seen = new Set<object>()
+    let hit = false
+    cellsOf(Math.min(u.x, v.x), Math.max(u.x, v.x), Math.min(u.y, v.y), Math.max(u.y, v.y), (i, j) => {
+      if (hit) return
+      const c = grid.get(i + ',' + j)
+      if (!c) return
+      for (const k of c.nodes) {
+        if (pointToSegment({ x: A.x[k], y: A.y[k] }, u, v) < radiusOf(A.nodes[k]) + EDGE_CLEARANCE) { hit = true; return }
+      }
+      for (const e of c.edges) {
+        if (seen.has(e)) continue
+        seen.add(e)
+        // The two edges from the shared node only touch there: fine.
+        if (atOrigin(u) && atOrigin(e[0])) continue
+        if (segmentsCross(u, v, e[0], e[1])) { hit = true; return }
+      }
     })
+    if (hit) return true
   }
-}
-
-/** Where two clashing nodes' branches part: the fork (their lowest common
- *  ancestor) and, for each, the branch of the fork it's in (null if it is
- *  the fork itself). */
-function whereTheyPart(a: ViewNode, b: ViewNode, book: Book): { fork: ViewNode; aSide: ViewNode | null; bSide: ViewNode | null } {
-  const chain = (n: ViewNode) => {
-    const up: ViewNode[] = [n]
-    for (let p = book.parent.get(n); p; p = book.parent.get(p)) up.push(p)
-    return up.reverse()   // root first
-  }
-  const ca = chain(a)
-  const cb = chain(b)
-  let i = 0
-  while (i + 1 < ca.length && i + 1 < cb.length && ca[i + 1] === cb[i + 1]) i++
-  return { fork: ca[i], aSide: ca[i + 1] ?? null, bSide: cb[i + 1] ?? null }
+  return false
 }
 
 /** Pairs of nodes that clash: two nodes too close, a node too close to an
@@ -452,6 +563,80 @@ export function tagOffset(n: BadgeSpot, width: number): { x: number; y: number }
 }
 
 const BADGE_OFFSET = 14
+
+/** Where each expanded variable's name tag goes (relative to its node), in
+ *  a layout: `tags` maps a node's path key ('0.1') to the tag's width;
+ *  `badges` lists the nodes that show a badge. In Tidy each tag is up and
+ *  to the left. In Organic each tag tries angles round its node (starting
+ *  beside the badge, 15° at a time) and takes the first spot clear of other
+ *  nodes, edges, badges and the tags already placed (or else the roomiest). */
+export function placeTags(layout: ViewLayout, tags: ReadonlyMap<string, number>, badges: ReadonlySet<string>): Map<string, Pt> {
+  const out = new Map<string, Pt>()
+  const key = (n: ViewNode) => n.path.join('.')
+  type Box = { x0: number; y0: number; x1: number; y1: number }
+  const boxAt = (c: Pt, hw: number, hh: number): Box => ({ x0: c.x - hw, y0: c.y - hh, x1: c.x + hw, y1: c.y + hh })
+  const taken: Box[] = []
+  for (const n of layout.nodes) {
+    if (!badges.has(key(n))) continue
+    const o = badgeOffset(n)
+    taken.push(boxAt({ x: n.x + o.x, y: n.y + o.y }, BADGE_HALF.w, BADGE_HALF.h))
+  }
+  // How much room a box has: the smallest gap to a node, an edge or a taken box (negative: overlapping).
+  const room = (b: Box, own: ViewNode) => {
+    let r = Infinity
+    const near = (x: number, y: number) => x > b.x0 - 60 && x < b.x1 + 60 && y > b.y0 - 60 && y < b.y1 + 60
+    for (const m of layout.nodes) if (m !== own && near(m.x, m.y)) r = Math.min(r, boxToPoint(b, m) - halfSize(m).hx)
+    for (const l of layout.links) {
+      if (Math.max(l.source.x, l.target.x) < b.x0 - 60 || Math.min(l.source.x, l.target.x) > b.x1 + 60) continue
+      if (Math.max(l.source.y, l.target.y) < b.y0 - 60 || Math.min(l.source.y, l.target.y) > b.y1 + 60) continue
+      r = Math.min(r, boxToSegment(b, l.source, l.target))
+    }
+    for (const t of taken) r = Math.min(r, boxToBox(b, t))
+    return r
+  }
+  for (const n of layout.nodes) {
+    const width = tags.get(key(n))
+    if (width === undefined) continue
+    let at = tagOffset(n, width)
+    if (n.badgeDir !== null) {
+      const start = Math.atan2(at.y, at.x)
+      let best = { at, room: -Infinity }
+      // Right beside the node first, then a little further out.
+      search: for (const extra of [0, 8, 16]) {
+        for (let k = 0; k <= 24; k++) {
+          const dir = start + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * (Math.PI / 12)
+          const o0 = outside(n, dir, width / 2, TAG_HALF_H)
+          const o = { x: o0.x + extra * Math.cos(dir), y: o0.y + extra * Math.sin(dir) }
+          const r = room(boxAt({ x: n.x + o.x, y: n.y + o.y }, width / 2, TAG_HALF_H), n)
+          if (r > best.room) best = { at: o, room: r }
+          if (r >= 2) break search
+        }
+      }
+      at = best.at
+    }
+    out.set(key(n), at)
+    taken.push(boxAt({ x: n.x + at.x, y: n.y + at.y }, width / 2, TAG_HALF_H))
+  }
+  return out
+}
+
+/** Gaps between a box and a point, a segment or another box (negative or 0: touching). */
+function boxToPoint(b: { x0: number; y0: number; x1: number; y1: number }, p: Pt): number {
+  const dx = Math.max(b.x0 - p.x, 0, p.x - b.x1)
+  const dy = Math.max(b.y0 - p.y, 0, p.y - b.y1)
+  return Math.hypot(dx, dy)
+}
+function boxToBox(a: { x0: number; y0: number; x1: number; y1: number }, b: { x0: number; y0: number; x1: number; y1: number }): number {
+  const dx = Math.max(a.x0 - b.x1, b.x0 - a.x1)
+  const dy = Math.max(a.y0 - b.y1, b.y0 - a.y1)
+  return dx > 0 || dy > 0 ? Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) : Math.max(dx, dy)
+}
+function boxToSegment(b: { x0: number; y0: number; x1: number; y1: number }, p: Pt, q: Pt): number {
+  const corners = [{ x: b.x0, y: b.y0 }, { x: b.x1, y: b.y0 }, { x: b.x1, y: b.y1 }, { x: b.x0, y: b.y1 }]
+  for (let i = 0; i < 4; i++) if (segmentsCross(p, q, corners[i], corners[(i + 1) % 4])) return -1
+  if (boxToPoint(b, p) === 0) return -1   // an end inside the box
+  return Math.min(boxToPoint(b, p), boxToPoint(b, q), ...corners.map((c) => pointToSegment(c, p, q)))
+}
 
 /** The badge and the tag share the free angle: the badge on one side of its
  *  middle, the tag on the other. */
