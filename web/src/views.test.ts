@@ -219,6 +219,23 @@ describe('badges and tags', () => {
     expect(Math.hypot(n.x + tag.x - parent.x, n.y + tag.y - parent.y)).toBeGreaterThan(Math.hypot(n.x + b.x - parent.x, n.y + b.y - parent.y))
   })
 
+  it('Organic: badges never overlap each other or sit on another node, on every reference tree', () => {
+    for (const t of TREES) {
+      const l = layoutFor('organic', t)
+      const spots = l.nodes.map((n) => { const o = badgeOffset(n); return { n, x: n.x + o.x, y: n.y + o.y } })
+      for (let i = 0; i < spots.length; i++) {
+        for (let j = i + 1; j < spots.length; j++) {
+          const a = spots[i], b = spots[j]
+          expect(Math.abs(a.x - b.x) >= 11 || Math.abs(a.y - b.y) >= 13).toBe(true)   // badges are 11 × 13
+        }
+        for (const m of l.nodes) {
+          if (m === spots[i].n) continue
+          expect(Math.hypot(spots[i].x - m.x, spots[i].y - m.y)).toBeGreaterThan(halfSize(m).hx + 5)
+        }
+      }
+    }
+  })
+
   it('widestGap finds the middle of the biggest gap between directions', () => {
     expect(widestGap([])).toBeNull()
     expect(widestGap([0])!.mid).toBeCloseTo(Math.PI)

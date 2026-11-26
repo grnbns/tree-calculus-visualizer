@@ -73,6 +73,17 @@ describe('templates: the book notation with parameters', () => {
     expect(() => parse('K, I')).toThrow(/unexpected ','/)
   })
 
+  it('templates used inside a template are labelled with the real arguments, not the parameter names', () => {
+    const names = (text: string) => parseNamed(text).marks.map((m) => m.mark.name).filter((n) => n.includes('{'))
+    expect(names('wait{K, △}')).toEqual(['wait{K, △}', 'd{K △}'])   // (d{I} is at the root, so wait's own label wins)
+    expect(names('query{K, K I, K I}')).toEqual(['query{K, K I, K I}', 'd{K² I}', 'd{K⁵ (K I)}', 'd{K³ K}'])
+    expect(names('query{K, K I, K I}').join()).not.toMatch(/\b[abc]\b/)
+    expect(names('swap{S}')).toEqual(['swap{S}', 'd{d{K}(K △)}', 'd{K}'])
+    // and each label is valid input for the same tree
+    const p = parseNamed('query{K, K I, K I}')
+    for (const m of p.marks.filter((m) => m.mark.name.startsWith('d{'))) expect(parse(m.mark.name)).toEqual(m.mark.def)
+  })
+
   it('a template is a chip labelled as typed; its arguments keep their chips', () => {
     const p = parseNamed('d{ K }  △')
     expect(p.marks[0]).toMatchObject({ path: [], mark: { name: 'd{K}' } })

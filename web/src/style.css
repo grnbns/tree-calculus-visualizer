@@ -226,13 +226,22 @@ h1 {
   gap: 6px;
 }
 
-.row, .add-row, .add-items {
+.row, .add-items {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
 }
-.examples { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.examples { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; max-height: 45vh; overflow-y: auto; }
+.examples[hidden] { display: none; }
+/* The title, with a button that folds the Add menu away. */
+.title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.title-row h1 { margin: 0; }
+.fold { border: none; background: none; padding: 2px 6px; color: var(--muted); font-size: 1.3rem; line-height: 1; }
+.fold:hover { color: var(--text); }
+/* Undo / redo: a curved arrow (redo is the same one mirrored). */
+.icon { width: 14px; height: 14px; display: block; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.icon.mirror { transform: scaleX(-1); }
 .examples .label { color: var(--muted); font-size: 0.8rem; margin-right: 2px; }
 /* Examples and Yours fold open and closed. */
 .add-group summary {
@@ -451,7 +460,7 @@ button.active { background: var(--accent); border-color: var(--accent); color: #
 .playback .controls { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; white-space: nowrap; }
 #scrub { flex: 1 1 40px; min-width: 24px; accent-color: var(--accent); }
 #frame-label:empty { display: none; }
-.play-speed { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 0.78rem; flex: 0 1 auto; min-width: 0; }
+.play-speed { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 0.78rem; flex: 0 1 auto; min-width: 0; }
 .play-speed input { width: 70px; min-width: 32px; flex: 0 1 70px; accent-color: var(--accent); }
 .play-speed output { font-family: ui-monospace, Menlo, monospace; min-width: 2em; }
 .colours-toggle { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 0.78rem; }
@@ -540,6 +549,5 @@ button.active { background: var(--accent); border-color: var(--accent); color: #
 @media (max-width: 720px) {
   .top-left, .bottom-left, .playback { flex-basis: 100%; width: 100%; }
   .top-right { flex-direction: row; flex-wrap: wrap; align-items: center; }
-  .add-row { flex-wrap: nowrap; overflow-x: auto; }
   .help { top: auto; bottom: 150px; }
 }

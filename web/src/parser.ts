@@ -75,8 +75,11 @@ export const TEMPLATES: Readonly<Record<string, { params: readonly string[]; bod
  *  of its own (its own chips are kept). */
 export type Parsed = { tree: Tree; marks: PathMark[]; transparent?: boolean }
 
-/** What a name stands for, or undefined if it isn't defined. */
-export type Lookup = (name: string) => Parsed | undefined
+/** What a name stands for, or undefined if it isn't defined. Inside a
+ *  template's body, `argText` gives the text of the argument a parameter
+ *  stands for, so chips of templates used in the body are labelled with
+ *  the real arguments (`d{K △}`, not `d{K y}`). */
+export type Lookup = ((name: string) => Parsed | undefined) & { argText?: (name: string) => string | undefined }
 
 export const NAME_RE = /^[A-Za-z][A-Za-z0-9]*$/
 
@@ -154,7 +157,7 @@ function parseTemplate(s: string, name: string, i: number, lookup: Lookup): Piec
     const from = j
     const [tree, next, marks] = parseSeq(s, j, lookup)
     args.push({ tree, marks, transparent: true })
-    texts.push(s.slice(from, next).trim().replace(/\s+/g, ' '))
+    texts.push(withArgs(s.slice(from, next).trim().replace(/\s+/g, ' '), lookup))
     j = next
     if (s[j] === ',') { j++; continue }
     if (s[j] === '}') { j++; break }
@@ -167,8 +170,24 @@ function parseTemplate(s: string, name: string, i: number, lookup: Lookup): Piec
     const k = t.params.indexOf(n)
     return k >= 0 ? args[k] : builtinLookup(n)
   }
+  local.argText = (n) => {
+    const k = t.params.indexOf(n)
+    return k >= 0 ? texts[k] : undefined
+  }
   const body = parseNamed(t.body, local)
   return named(`${name}{${texts.join(', ')}}`, body, j)
+}
+
+/** A template argument's text as written in a body, with each parameter
+ *  name replaced by the text of its argument (in brackets if it's more than
+ *  one piece, so `d{K y}` with y = `K I` reads `d{K (K I)}`). */
+function withArgs(text: string, lookup: Lookup): string {
+  if (!lookup.argText) return text
+  return text.replace(/[A-Za-z][A-Za-z0-9]*/g, (name) => {
+    const arg = lookup.argText!(name)
+    if (arg === undefined) return name
+    return /\s/.test(arg) ? `(${arg})` : arg
+  })
 }
 
 /** Read ONE argument starting at s[i]: a '△', a name, a template call or a

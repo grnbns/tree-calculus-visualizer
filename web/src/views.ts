@@ -358,6 +358,52 @@ function placeBadges(nodes: ViewNode[], links: ViewLayout['links']): void {
       n.badgeDir = -Math.PI / 4   // a lone node: up and to the right, as in Tidy
     }
   }
+  keepBadgesApart(nodes, links)
+}
+
+/** A badge needs this much room around its centre: from other nodes, from
+ *  edges, and from other badges. */
+const BADGE_ROOM = 13
+
+/** Two nodes close together can both pick the space between them for their
+ *  badges. So, node by node, the badge tries angles within the node's free
+ *  space (the middle first, then further out on either side) and takes the
+ *  first spot that's clear of other nodes, edges and the badges already
+ *  placed (or else the roomiest). Nodes with room keep their spot. */
+function keepBadgesApart(nodes: ViewNode[], links: ViewLayout['links']): void {
+  const placed: Pt[] = []
+  // Only what's near matters (anything further than FAR is room enough).
+  const FAR = 60
+  const near = (at: Pt, x: number, y: number, pad = 0) => Math.abs(at.x - x) < FAR + pad && Math.abs(at.y - y) < FAR + pad
+  const room = (n: ViewNode, at: Pt) => {
+    let r = FAR
+    for (const m of nodes) if (m !== n && near(at, m.x, m.y, halfSize(m).hx)) r = Math.min(r, Math.hypot(at.x - m.x, at.y - m.y) - halfSize(m).hx)
+    for (const l of links) {
+      if (Math.min(l.source.x, l.target.x) > at.x + FAR || Math.max(l.source.x, l.target.x) < at.x - FAR) continue
+      if (Math.min(l.source.y, l.target.y) > at.y + FAR || Math.max(l.source.y, l.target.y) < at.y - FAR) continue
+      r = Math.min(r, pointToSegment(at, l.source, l.target))
+    }
+    for (const b of placed) if (near(at, b.x, b.y)) r = Math.min(r, Math.hypot(at.x - b.x, at.y - b.y) - BADGE_ROOM)
+    return r
+  }
+  const STEP = Math.PI / 12
+  for (const n of nodes) {
+    const turn = n.tagSide * spread(n)
+    const preferred = n.badgeDir! - turn          // where badgeOffset puts it
+    let best = { dir: n.badgeDir!, room: -Infinity }
+    for (let k = 0; k <= 12; k++) {
+      // 0, +15°, -15°, +30°, … (within the free angle while it lasts, then anywhere)
+      const at = preferred + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * STEP
+      const dir = at + turn
+      const o = badgeOffset({ ...n, badgeDir: dir })
+      const r = room(n, { x: n.x + o.x, y: n.y + o.y })
+      if (r > best.room) best = { dir, room: r }
+      if (r >= BADGE_ROOM) break
+    }
+    n.badgeDir = best.dir
+    const o = badgeOffset(n)
+    placed.push({ x: n.x + o.x, y: n.y + o.y })
+  }
 }
 
 /** The widest gap between some directions (radians): its middle and width. */

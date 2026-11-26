@@ -54,7 +54,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
   <div class="hud top">
   <section class="panel top-left" aria-label="Trees">
-    <h1>Tree Calculus</h1>
+    <div class="title-row">
+      <h1>Tree Calculus</h1>
+      <button id="menu-fold" class="fold" type="button" aria-expanded="true" aria-controls="examples" title="Hide the Add menu">▾</button>
+    </div>
     <div class="input-row">
       <input id="tree-input" spellcheck="false" autocomplete="off" aria-label="Tree in △ notation"
              placeholder="△(△△)(△△△) or S K K △" />
@@ -72,8 +75,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <button type="button" role="radio" data-mode="move">Move</button>
     </div>
     <div class="row">
-      <button id="undo-btn" type="button" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
-      <button id="redo-btn" type="button" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">↷</button>
+      <button id="undo-btn" type="button" title="Undo (Ctrl+Z)" aria-label="Undo"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 6.5h7a3.25 3.25 0 0 1 0 6.5H6"/><path d="M6.5 3.5l-3 3 3 3"/></svg></button>
+      <button id="redo-btn" type="button" title="Redo (Ctrl+Shift+Z)" aria-label="Redo"><svg class="icon mirror" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 6.5h7a3.25 3.25 0 0 1 0 6.5H6"/><path d="M6.5 3.5l-3 3 3 3"/></svg></button>
       <button id="clear-btn" type="button" title="Remove every tree">Clear</button>
       <span class="sep"></span>
       <button id="zoom-out-btn" type="button" title="Zoom out (−)" aria-label="Zoom out">−</button>
@@ -176,6 +179,19 @@ const clearBtn = $<HTMLButtonElement>('#clear-btn')
 const helpBtn = $<HTMLButtonElement>('#help-btn')
 const helpPanel = $<HTMLElement>('#help')
 const examples = $<HTMLDivElement>('#examples')
+
+// The Add menu folds away (remembered), so it doesn't cover the canvas.
+const MENU_FOLD_KEY = 'tree-calculus-menu-folded'
+const menuFold = $<HTMLButtonElement>('#menu-fold')
+function foldMenu(folded: boolean): void {
+  examples.hidden = folded
+  menuFold.textContent = folded ? '▸' : '▾'
+  menuFold.title = folded ? 'Show the Add menu' : 'Hide the Add menu'
+  menuFold.setAttribute('aria-expanded', String(!folded))
+  try { localStorage.setItem(MENU_FOLD_KEY, folded ? 'yes' : 'no') } catch { /* not saved */ }
+}
+foldMenu((() => { try { return localStorage.getItem(MENU_FOLD_KEY) === 'yes' } catch { return false } })())
+menuFold.addEventListener('click', () => foldMenu(!examples.hidden))
 const sliders = $<HTMLDivElement>('#sliders')
 
 const scene = new Scene(svg)
@@ -877,13 +893,12 @@ function makeDraggable(b: HTMLButtonElement, text: string, afterAdd?: () => void
 }
 
 /** The Add menu: △, the built-in variables, examples, then your variables. */
-// Sections of the Add menu: Basics is always shown; Examples and Yours fold
-// open and closed (remembered). Yours scrolls when long, and gets a filter box
+// Sections of the Add menu fold open and closed (remembered). Yours scrolls when long, and gets a filter box
 // once there are more than FILTER_FROM variables.
 const ADD_OPEN_KEY = 'tree-calculus-add-open'
 const FILTER_FROM = 8
 let addOpen: Record<string, boolean> = (() => {
-  const defaults = { booleans: true, numbers: false, queries: false, templates: false, examples: false, yours: true }
+  const defaults = { basics: true, booleans: true, numbers: false, queries: false, templates: false, examples: false, yours: true }
   try { return { ...defaults, ...JSON.parse(localStorage.getItem(ADD_OPEN_KEY) ?? '{}') } } catch { return defaults }
 })()
 let varFilter = ''
@@ -912,10 +927,7 @@ function renderAddMenu(): void {
   }
 
   examples.replaceChildren()
-  const basics = document.createElement('div')
-  basics.className = 'add-row'
-  basics.innerHTML = '<span class="label">Add</span>'
-  examples.append(basics)
+  const basics = section('basics', 'Basics')
   button(basics, '△', '△')
   const builtin = (into: HTMLElement, v: { name: string; text: string }) =>
     button(into, v.name, v.name, `Add ${v.name} = ${v.text} (or drag it onto a node)`).classList.add('var')
