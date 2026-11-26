@@ -8,7 +8,7 @@ This plan is deliberately high-level. Each milestone has a goal, a finish line, 
 
 ## Where things stand (25 Nov 2026)
 
-**Milestones 0–10 are done.** Next up: Milestone 11 (the finish-line test of milestone 10, a learner following a reduction alone, is still to be tried by a person).
+**Milestones 0–10 are done.** Next up: Milestone 11. Deploying is deliberately last (milestone 15), after the remaining features. (Milestone 10's finish line, a learner following a reduction alone, is still to be tried by a person; milestone 13's lessons are where that gets tested.)
 
 | Milestone | Status |
 |---|---|
@@ -23,7 +23,11 @@ This plan is deliberately high-level. Each milestone has a goal, a finish line, 
 | 8. Full-screen canvas | ✅ Done |
 | 9. Copy, paste and variables | ✅ Done |
 | 10. Make it clear for learners | ✅ Done |
-| 11. Ship it | ⏭️ Next |
+| 11. Book trees: booleans | ⏭️ Next |
+| 12. Settings and a choice of View | Not started |
+| 13. Guided lessons | Not started |
+| 14. Touch and small screens | Not started |
+| 15. Ship it | Not started |
 
 What exists now:
 
@@ -216,16 +220,27 @@ Build bigger trees out of smaller named pieces, the way the book does (`K`, `I`,
 - [x] **Add mode:** clicking empty canvas makes a new leaf.
 - [x] **Add menu:** collapsible sections, scrolling list, filter box for many variables.
 
-### Later (moved out of milestone 10)
-- **Book trees as built-in variables:** booleans (`True = K`, `False = K I`, `Not`, `And`, `Or`, with the book's exact definitions), in a grouped Add menu (Basics · Booleans · Examples · Yours).
-- **Guided lessons** from chapter 3: a Lessons panel, each lesson loads its trees and explains what to look at in 2–3 sentences, with Back / Next. Proposed: trees and shapes; adding a branch is application; K; F; S; `I x = x`; `D` and `S K K x = x`.
+### 11. Book trees: booleans
+More named trees from the book, built in like K, I, D, S.
+- `True`, `False`, `Not`, `And`, `Or` as **built-in variables** (read-only), using the book's exact definitions (check the chapter and the forms in the book first; `True = K`, `False = K I` is the expected start).
+- **Group the Add menu:** Basics (△ K I D S) · Booleans · Examples · Yours, using the foldable sections from milestone 10.
+- A couple of examples, e.g. `Not True`, `And True False`, which reduce to a chip thanks to milestone 10's result recognition (that currently only looks at *your* variables; decide whether built-in booleans count, given `True = K`).
 
-### Later: a choice of View (more ambitious)
-A **View** setting in the ⚙ settings panel, with three ways to lay trees out. Switching views should animate: nodes keep their ids and glide to their new places.
+**Done when:** you can add `Not True` from the menu, play it, and watch it end as `False`.
+**Think about:** a normal form equal to `K` is also `True`. Which name wins, and when? (Probably: the booleans only when the starting tree used a boolean.)
+
+### 12. Settings and a choice of View (more ambitious)
+The ⚙ panel is still the physics-tuning panel from milestone 4. Turn it into **Settings**:
+- keep **Animation speed** up front (useful to learners)
+- fold the other physics sliders into a "Physics" section
+- add a **View** choice with three ways to lay trees out
+
+Switching views should animate: nodes keep their ids and glide to their new places. The choice is remembered in the browser, like Colours.
 - **Tidy** (what exists now): every level on its own row, siblings evenly spaced, branches straight down.
 - **Spiderweb (radial):** the root in the centre, branches going out in every direction, each level on a ring further out. Branch order still has to be readable: going clockwise, the first branch comes first.
 - **Organic:** still growing downward, but looser. Levels don't have to line up exactly, siblings aren't evenly spaced, and branches cluster toward "down" (a fan under their parent rather than a row). The variety comes from the tree itself: a node with more children spreads wider, so different shapes give different silhouettes. The same tree should always look the same, so no randomness.
 
+**Done when:** you can switch between the three views while a reduction plays, and every view keeps branch order readable, chips and badges legible, and trees out of each other's way.
 **Think about:**
 - Today the layout is a set of target positions that the physics pulls nodes toward (`layoutTree` in render.ts, plus the target forces in scene.ts). A View could just be a different target function with the same signature, so dragging, the camera, drop targets and animation all keep working.
 - **Radial:** d3-hierarchy can do this: a `tree()` layout with `size([2π, radius])`, then convert to x/y. Watch for:
@@ -236,10 +251,41 @@ A **View** setting in the ⚙ settings panel, with three ways to lay trees out. 
   - each child sits at an angle in a fan below its parent (the fan is wider for more children), at a distance that depends on the size of its subtree
   - pull toward those targets more weakly than in Tidy, so the springs and repulsion do more of the shaping
 - **Branch order** must stay readable in every view. The sibling-order force is written for left-to-right rows: radial needs it by angle, organic by angle within the fan.
-- Should the choice be remembered in the browser, like Colours? Probably yes.
+- The fade time is still the `LEAVE_MS = 0` experiment; decide here whether it stays (as a setting, perhaps).
 
-### 11. Ship it
-- GitHub Pages deploy, short README with a GIF.
+### 13. Guided lessons
+A **Lessons** panel (a 📖 button, top right). Each lesson loads its trees, explains in 2–3 plain sentences what to look at, and has **Back / Next**. It doesn't check answers.
+- Proposed, from chapter 3: trees and shapes; adding a branch is application; the K rule; the fork rule F; the stem rule S; `I x = x`; `D` and `S K K x = x`. Maybe one on booleans (milestone 11).
+- Written last on purpose, so the text describes the finished UI.
+
+**Done when:** someone who has only read chapter 3 can go through the lessons and then follow a reduction on their own (this is also milestone 10's finish line, still to be tried by a person).
+
+### 14. Touch and small screens
+Pan, pinch and drag already work on touch screens; the right-click menu doesn't.
+- **Long press** opens the same menu as right-click (Copy, Paste here, Name this…, Expand, Collapse, Remove).
+- Check the floating panels, the Add menu and the playback panel on a phone-sized screen.
+- Hover-only things (previewing a redex by hovering its letter, tooltips) need a touch alternative or can be skipped.
+
+**Done when:** you can build, name, expand and reduce a tree on a phone without a mouse or keyboard.
+
+### 15. Ship it
+Put it online: GitHub Pages, deployed by GitHub Actions.
+- **Build under a subfolder:** Pages serves the app at `https://<user>.github.io/tree-calculus-visualizer/`. There's no `vite.config` yet, so the built paths (and `/favicon.svg` in index.html) start at `/` and would break; set `base: './'`. Check the built app with `vite preview` under a subpath, `?t=` links included.
+- **Workflow** (`.github/workflows/deploy.yml`):
+  - on every push to `main`: install, run the tests, build, deploy
+  - pull requests: tests only
+  - also run the Python tests (`pytest`, which checks that `tests/cases.json` is up to date), so the two engines can't drift apart
+  - add a `test:run` script (`vitest run`; `npm test` is watch mode)
+- **One-time repo setting** (done in the browser): Settings → Pages → Source → "GitHub Actions". Pages on a private repo needs a paid plan, so the repo should be public.
+- **Polish:**
+  - open the ? help once on a first visit (remembered)
+  - start from a tree that shows something, e.g. `S K K (△△)`
+  - a `<meta name="description">` and Open Graph tags with a still image, so a shared link shows a preview
+  - a license (e.g. MIT) if wanted
+- **README:** the live link and a short GIF at the top. For example, `S K K V` with Colours on, about 8 seconds and under 3 MB, recorded in headless Chrome and converted with ffmpeg.
+- Saved data is fine on `github.io`: browser storage is shared by every project site there, but all our keys start with `tree-calculus-`.
+
+**Done when:** pushing to `main` runs the tests and updates the live site, and the README opens with the GIF and the link.
 
 ---
 

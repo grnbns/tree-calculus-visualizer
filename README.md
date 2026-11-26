@@ -67,4 +67,4 @@ The repository root has the original Python engine (`reduction_logic.py`, `parse
 
 ## Status
 
-See [PLAN.md](PLAN.md) for the milestones. Milestones 0–10 are done: engine, drawing, motion, building, reducing, the full-screen canvas, copy, paste and variables, and the rule card and colours for learners. Next is a public deploy. Later ideas include the book's booleans as built-in variables, guided lessons, and other ways to view a tree (radial and organic).
+See [PLAN.md](PLAN.md) for the milestones. Milestones 0–10 are done: engine, drawing, motion, building, reducing, the full-screen canvas, copy, paste and variables, and the rule card and colours for learners. Next are the book's booleans as built-in variables, a Settings panel with other ways to view a tree (radial and organic), guided lessons, and touch support. A public deploy comes last.
