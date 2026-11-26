@@ -8,7 +8,7 @@ This plan is deliberately high-level. Each milestone has a goal, a finish line, 
 
 ## Where things stand (25 Nov 2026)
 
-**Milestones 0–12 are done.** Next up: Milestone 13. Deploying is deliberately last (milestone 16), after the remaining features. (Milestone 10's finish line, a learner following a reduction alone, is still to be tried by a person; milestone 13's lessons are where that gets tested.)
+**Milestones 0–12 are done.** Next up: Milestone 13. Deploying is deliberately last (milestone 17), after the remaining features. (Milestone 10's finish line, a learner following a reduction alone, is still to be tried by a person; milestone 16's lessons are where that gets tested.)
 
 | Milestone | Status |
 |---|---|
@@ -25,10 +25,11 @@ This plan is deliberately high-level. Each milestone has a goal, a finish line, 
 | 10. Make it clear for learners | ✅ Done |
 | 11. Book trees and notation | ✅ Done |
 | 12. Settings and a choice of View | ✅ Done |
-| 13. Guided lessons | ⏭️ Next |
+| 13. Scripts: a sandbox mode | ⏭️ Next |
 | 14. Your own templates | Not started |
 | 15. Touch and small screens | Not started |
-| 16. Ship it | Not started |
+| 16. Guided lessons (as scripts) | Not started |
+| 17. Ship it | Not started |
 
 What exists now:
 
@@ -270,7 +271,7 @@ Every definition is already a value (a binary tree), so it never needs reducing 
 All the truth tables come out right (checked). Things worth noticing:
 - `Or` is `Implies I`, and `Not` is `Implies (And I)`, so expanding `Not` shows `Implies`-shaped insides even though the book doesn't say so. You could write `Not = Implies(And I)` if you'd like the chips to show that.
 - `And True False` → `False` and `Not True` → `False` both end on `K I`. `Or False True` ends on `K`, which is also `True`: that's the naming question above.
-- The book leaves checking `implies`, `not` and `iff` as exercises (Ex. 2–3), so these make good lesson material for milestone 13.
+- The book leaves checking `implies`, `not` and `iff` as exercises (Ex. 2–3), so these make good lesson material for milestone 16.
 
 **Pairs (§3.6)**: maybe later
 - `Pair = △`, so `Pair x y` is simply the fork `△ x y`.
@@ -363,12 +364,40 @@ Switching views should animate: nodes keep their ids and glide to their new plac
 - **Small fixes after the milestone:** the Add menu's sections are all dropdowns (Basics first) and the whole menu folds away and scrolls; undo/redo are drawn arrows; the Speed slider stays at the right of the playback row; templates used inside a template (`wait`, `query`) label their chips with the real arguments (`d{K △}`, not `d{K y}`); and in Organic, badges of nodes close together no longer overlap (each takes the first clear spot within its node's free space).
 - **Known (from before this milestone, unchanged):** while you drag fast in Tidy, the dev order check can report a pair out of order for a frame (the hard rule works on position + velocity before d3's damping). The order is right again on release.
 
-### 13. Guided lessons
-A **Lessons** panel (a 📖 button, top right). Each lesson loads its trees, explains in 2–3 plain sentences what to look at, and has **Back / Next**. It doesn't check answers.
-- Proposed, from chapter 3: trees and shapes; adding a branch is application; the K rule; the fork rule F; the stem rule S; `I x = x`; `D` and `S K K x = x`. Maybe one on booleans (milestone 11).
-- Written last on purpose, so the text describes the finished UI.
+### 13. Scripts: a sandbox mode (ambitious)
+Write a small program and watch it run, one statement at a time. For example:
 
-**Done when:** someone who has only read chapter 3 can go through the lessons and then follow a reduction on their own (this is also milestone 10's finish line, still to be tried by a person).
+```
+x = △
+y = △△
+z = x y
+normalize(z)
+```
+
+As it runs: a `△` sprouts and folds into an `x` chip; `△△` sprouts and folds into `y`; copies of `x` and `y` come together (`x` is applied to `y`, as when you drop one tree on another) and fold into a `z` chip; then `z` reduces step by step to its normal form, with the rule card and colours as usual.
+
+- **A separate mode:** a toggle (e.g. a **Sandbox** button, or a tab) swaps the whole screen. A code editor goes on one side and the canvas on the other, with debugger-style controls: **Step** (one statement), **Run**, **Reset**. The current line is highlighted, and an error shows its line. Inside `normalize`, Step goes rule by rule, like ▶| today.
+- **The language, kept tiny:**
+  - `name = expression`: any expression the input box accepts (△ or `^`, names, the book's templates, powers, numbers), using names defined earlier in the script
+  - `normalize(name)`: reduce to a normal form, step by step
+  - perhaps `step(name)` / `step(name, n)` and `show(expression)` later
+  - one statement per line or separated by `;`; `#` comments
+- **Built on what exists:** the parser for expressions; chips and marks for naming (folding into a chip is the existing collapse animation, with `absorbed`); `addFragment` / `joinTrees` for building; `run.ts` for normalizing. The pure part goes in a new `script.ts` with tests: parse a script into statements, then turn each statement into workspace frames, so the canvas plays them the same way it plays a reduction run, and stepping back works.
+
+**Done when:** you can type the four lines above, press Step repeatedly and watch `x`, `y` and `z` appear, join and fold into chips, and `z` reduce to its normal form; and an error (say, an unknown name on line 3) points at that line.
+
+**Decided:**
+- **Move, not copy:** in `z = x y`, the `x` and `y` trees move into `z` (they're no longer separate trees). If a later statement uses `x` or `y` again (say `w = x x`), fresh copies of `x` and `y` pop up for it, sprouting as chips, then join.
+- **Layout and camera:** each new tree appears near the trees already there (as `nextFreeX` / `makeRoom` place trees today), and the camera follows the statement being run, gliding or zooming out so everything involved stays in view.
+- **Separate memory:** a script can *use* your saved variables (**Yours**) and the built-ins, but the names it defines are its own set, kept with the script (while in Sandbox mode); running a script never adds to or changes your saved variables. A script's own name may hide a saved variable of the same name inside that script.
+- **No reassigning:** each name is defined once per script; `x = K` after `x = △` is an error that points at its line.
+- **Shareable:** scripts are saved in the browser and can be put in the URL (like `?t=`), so a link opens the sandbox with the script.
+
+- **Lessons will be scripts** (milestone 16): comments become the narration shown beside the canvas, and Back / Next become step back / Step. That's why this milestone comes first.
+
+**Think about:**
+- How comments are shown while running (the comment block just above the current statement, in a narration panel?), since lessons will rely on it.
+- A lesson that asks the learner to click something would need a `pause` or "your turn" statement; not needed for the planned lessons.
 
 ### 14. Your own templates
 Let people define their own book-style notation, e.g. `pair{x, y} = △ x y`, next to their variables.
@@ -385,7 +414,15 @@ Pan, pinch and drag already work on touch screens; the right-click menu doesn't.
 
 **Done when:** you can build, name, expand and reduce a tree on a phone without a mouse or keyboard.
 
-### 16. Ship it
+### 16. Guided lessons (as scripts)
+A **Lessons** panel (a 📖 button, top right). Each lesson loads its trees, explains in 2–3 plain sentences what to look at, and has **Back / Next**. It doesn't check answers.
+- **Each lesson is a commented script** (milestone 13), shipped with the app: its comments are the explanation, Next is Step and Back is step back. So lessons need no engine of their own, and anyone can write one.
+- Proposed, from chapter 3: trees and shapes; adding a branch is application; the K rule; the fork rule F; the stem rule S; `I x = x`; `D` and `S K K x = x`. Maybe one on booleans (milestone 11).
+- Written last on purpose, so the text describes the finished UI.
+
+**Done when:** someone who has only read chapter 3 can go through the lessons and then follow a reduction on their own (this is also milestone 10's finish line, still to be tried by a person).
+
+### 17. Ship it
 Put it online: GitHub Pages, deployed by GitHub Actions.
 - **Build under a subfolder:** Pages serves the app at `https://<user>.github.io/tree-calculus-visualizer/`. There's no `vite.config` yet, so the built paths (and `/favicon.svg` in index.html) start at `/` and would break; set `base: './'`. Check the built app with `vite preview` under a subpath, `?t=` links included.
 - **Workflow** (`.github/workflows/deploy.yml`):

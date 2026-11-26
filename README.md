@@ -81,4 +81,4 @@ The repository root has the original Python engine (`reduction_logic.py`, `parse
 
 ## Status
 
-See [PLAN.md](PLAN.md) for the milestones. Milestones 0–12 are done: engine, drawing, motion, building, reducing, the full-screen canvas, copy, paste and variables, the rule card and colours for learners, the book's trees and notation, and Settings with a choice of view. Next are guided lessons, defining your own templates, and touch support. A public deploy comes last.
+See [PLAN.md](PLAN.md) for the milestones. Milestones 0–12 are done: engine, drawing, motion, building, reducing, the full-screen canvas, copy, paste and variables, the rule card and colours for learners, the book's trees and notation, and Settings with a choice of view. Next are a sandbox mode for small scripts (`x = △`, `z = x y`, `normalize(z)`, run step by step), defining your own templates, touch support, and guided lessons written as scripts. A public deploy comes last.
