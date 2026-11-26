@@ -25,7 +25,7 @@ This plan is deliberately high-level. Each milestone has a goal, a finish line, 
 | 10. Make it clear for learners | ✅ Done |
 | 11. Book trees and notation | ✅ Done |
 | 12. Settings and a choice of View | ✅ Done |
-| 13. Scripts: a sandbox mode | ⏭️ Next |
+| 13. Scripts: real Python with trees | ⏭️ Next |
 | 14. Your own templates | Not started |
 | 15. Touch and small screens | Not started |
 | 16. Guided lessons (as scripts) | Not started |
@@ -364,40 +364,58 @@ Switching views should animate: nodes keep their ids and glide to their new plac
 - **Small fixes after the milestone:** the Add menu's sections are all dropdowns (Basics first) and the whole menu folds away and scrolls; undo/redo are drawn arrows; the Speed slider stays at the right of the playback row; templates used inside a template (`wait`, `query`) label their chips with the real arguments (`d{K △}`, not `d{K y}`); and in Organic, badges of nodes close together no longer overlap (each takes the first clear spot within its node's free space).
 - **Known (from before this milestone, unchanged):** while you drag fast in Tidy, the dev order check can report a pair out of order for a frame (the hard rule works on position + velocity before d3's damping). The order is right again on release.
 
-### 13. Scripts: a sandbox mode (ambitious)
-Write a small program and watch it run, one statement at a time. For example:
+### 13. Scripts: real Python with trees (ambitious)
+Write a real Python program whose variables hold trees, run it, and play back how those variables changed, like a debugger's watch list where every value is drawn as a tree. Python runs in the browser with **Pyodide** (CPython compiled to WebAssembly), so there's still no server and the app stays a static site (milestone 17). The idea is the one behind Python Tutor: run the program once while **tracing** it, then play back the recording. For example:
 
+```python
+x = Tree("△")
+y = Tree("x △")                 # names in the string are your Python variables
+for i in range(5):
+    x = Tree("△ x y")
+    y = Tree("△ y x")
+z = normalize(Tree("x y"))      # reduces step by step on the canvas
 ```
-x = △
-y = △△
-z = x y
-normalize(z)
-```
 
-As it runs: a `△` sprouts and folds into an `x` chip; `△△` sprouts and folds into `y`; copies of `x` and `y` come together (`x` is applied to `y`, as when you drop one tree on another) and fold into a `z` chip; then `z` reduces step by step to its normal form, with the rule card and colours as usual.
+As it plays back, there's one tree per variable on the canvas, each with its name tag. `x = Tree("△ x y")` builds a new tree: x's old tree moves into it (nothing else holds it now), a copy of y sprouts out of y's tree as a chip, and the result becomes x. Older values show as **versioned chips** (`x₃`, `y₃`) inside the newer ones, so `x₅` reads `△ x₄ y₄`, and expanding a chip goes back one version. `normalize` plays rule by rule, with the rule card and colours as usual.
 
-- **A separate mode:** a toggle (e.g. a **Sandbox** button, or a tab) swaps the whole screen. A code editor goes on one side and the canvas on the other, with debugger-style controls: **Step** (one statement), **Run**, **Reset**. The current line is highlighted, and an error shows its line. Inside `normalize`, Step goes rule by rule, like ▶| today.
-- **The language, kept tiny:**
-  - `name = expression`: any expression the input box accepts (△ or `^`, names, the book's templates, powers, numbers), using names defined earlier in the script
-  - `normalize(name)`: reduce to a normal form, step by step
-  - perhaps `step(name)` / `step(name, n)` and `show(expression)` later
-  - one statement per line or separated by `;`; `#` comments
-- **Built on what exists:** the parser for expressions; chips and marks for naming (folding into a chip is the existing collapse animation, with `absorbed`); `addFragment` / `joinTrees` for building; `run.ts` for normalizing. The pure part goes in a new `script.ts` with tests: parse a script into statements, then turn each statement into workspace frames, so the canvas plays them the same way it plays a reduction run, and stepping back works.
+**The Python side** (a small `tree` module, imported for you):
+- `Tree("…")` builds a tree from the same text the input box takes (△ or `^`, the book's templates, powers, numbers). A name in the string means, in order: a Python variable in scope holding a `Tree` (or an `int`, which becomes that number tree, so `Tree("K i")` works in a loop), then **Yours**, then the built-ins. A bad string raises `TreeSyntaxError` pointing at the column inside the string.
+- Trees are immutable values. `x(y)` is application (`Tree("x y")` in plain Python), `x == y` compares shapes (so `if` and `while` work), and `x.size`, `x.kind` (`"leaf"`, `"stem"`, `"fork"` or `"computation"`) and `str(x)` (△ text with names) are there to read.
+- `normalize(t)` returns the normal form, and `step(t, n=1)` returns t after n rules. Both are recorded rule by rule for the playback. A `normalize` that hits the step limit raises an error.
+- Everything else is plain Python: `if`, `while`, `def`, recursion, lists, `print` (its output shows in an Output strip, in time with the playback).
 
-**Done when:** you can type the four lines above, press Step repeatedly and watch `x`, `y` and `z` appear, join and fold into chips, and `z` reduce to its normal form; and an error (say, an unknown name on line 3) points at that line.
+**How it runs:**
+- **In a Web Worker**, so the page never freezes. Pyodide loads the first time Sandbox opens ("Loading Python…", a few seconds), from a pinned version on a CDN. The browser caches it after that.
+- **Recording:** the worker runs the whole program with `sys.settrace`. After each line of your code, it records the line number and every visible variable holding a `Tree` (globals, plus the locals of the function you're in, shown under its name). The `Tree` objects themselves log how they were built (from which trees, and the names used for them), so the visualizer knows what moved and what was copied. When the program finishes, the whole trace goes to the page in one message. Calls between Python and JavaScript are slow, so the page and the worker don't talk line by line.
+- **Trees** are built, compared and reduced in TypeScript (the existing parser and engine, loaded into the worker). Python only holds handles to them.
+- **Playback** goes over the recorded trace with **Reset · Back · Step · Run/Pause** and a scrubber. Step goes one line; inside `normalize` / `step` it goes rule by rule, like ▶| today. The highlighted line is the next one to run.
+- **When it runs:** only when you press **▶ Run** (⌘/Ctrl+Enter), never while you type, so a half-written `while True:` can't start by itself. Syntax errors are checked as you type (Python's `compile`, cheap). Editing marks the recording out of date until the next Run.
+- **Limits:** each tree may have at most `MAX_SCRIPT_NODES` nodes (about 20 000; `Tree(...)` raises an error past it), the trace at most about 2 000 lines, and the run at most about 5 s of wall time (after that the worker is stopped and restarted). Each stop shows a clear message on the line where it happened. Trees share structure in memory, but ids, marks and layout touch every node, hence the cap. (Doubling `x` and `y` as above for 20 passes would reach about 267 million nodes: they follow the Fibonacci numbers. It stops at pass 10.)
+- **Errors:** a Python exception highlights its line, shows its message, and the playback stops there (everything before it can still be stepped through).
 
-**Decided:**
-- **Move, not copy:** in `z = x y`, the `x` and `y` trees move into `z` (they're no longer separate trees). If a later statement uses `x` or `y` again (say `w = x x`), fresh copies of `x` and `y` pop up for it, sprouting as chips, then join.
-- **Layout and camera:** each new tree appears near the trees already there (as `nextFreeX` / `makeRoom` place trees today), and the camera follows the statement being run, gliding or zooming out so everything involved stays in view.
-- **Separate memory:** a script can *use* your saved variables (**Yours**) and the built-ins, but the names it defines are its own set, kept with the script (while in Sandbox mode); running a script never adds to or changes your saved variables. A script's own name may hide a saved variable of the same name inside that script.
-- **No reassigning:** each name is defined once per script; `x = K` after `x = △` is an error that points at its line.
-- **Shareable:** scripts are saved in the browser and can be put in the URL (like `?t=`), so a link opens the sandbox with the script.
+**Built on what exists:** the parser and engine (into the worker); chips and marks (a versioned chip is a mark named `x₃`); `run.ts` for the rule frames; frames like a reduction run's, so stepping back and the scrubber work.
+- New pure, tested modules: `trace.ts` (the trace format, and turning a trace into workspace frames: versions, chip names, what moves and what is copied, born/absorbed) and `pytree.ts` (what the worker exposes to Python: building from text with a name resolver, apply, equality, normalize/step with their rule log, the size cap). Vitest tests for both, without Pyodide.
+- A few slower end-to-end tests that load Pyodide in Node (the `pyodide` npm package works there), kept in their own file.
+- `pyworker.ts` (the worker: load Pyodide, install the `tree` module, run with tracing, post the trace) and the Sandbox UI in `main.ts`.
 
-- **Lessons will be scripts** (milestone 16): comments become the narration shown beside the canvas, and Back / Next become step back / Step. That's why this milestone comes first.
+**Done when:** you can type the example above, press Run, then Step and watch x and y grow pass by pass (older values folding into `x₃`-style chips), scrub back and forth through the whole run, and watch `z` reduce rule by rule. An error (a Python exception, a bad `Tree("…")` string, or the size limit) points at its line, and an endless loop stops with a message instead of hanging the page.
+
+**Still decided (from the first design):**
+- **A separate mode** (Canvas | Sandbox tabs) with its own workspace. The canvas's undo is untouched, and in Sandbox, Back and Reset take the place of undo. The sandbox canvas is view-only (pan, zoom, expand/collapse, copy).
+- **Separate memory:** a script can use your saved variables (**Yours**) and the built-ins. A Python variable may hide one of Yours inside the script. Running a script never changes Yours.
+- **Editor:** a textarea with a highlight layer behind it (current line, error line, comments dimmed, line numbers). Tab and Enter keep Python's indentation (4 spaces). No editor library.
+- **Narration:** the full-line comments just above the highlighted line show in a panel at the top of the canvas (inside a loop, on every pass).
+- **Shareable:** the script is saved in the browser, and `?script=` links open it (a linked script replaces yours only once you edit it).
+- **Moving and copying:** the variable being reassigned gives its old tree to the new value (the nodes travel). Every other variable used is copied, and the copy sprouts as a chip from that variable's tree.
+
+- **Lessons will be scripts** (milestone 16): a lesson is a commented Python file. Back / Next become Back / Step.
 
 **Think about:**
-- How comments are shown while running (the comment block just above the current statement, in a narration panel?), since lessons will rely on it.
-- A lesson that asks the learner to click something would need a `pause` or "your turn" statement; not needed for the planned lessons.
+- Which variables get a slot on the canvas: only names holding a `Tree` (an `int` or a list of trees doesn't). A list of trees could later show as a row of trees.
+- Does a variable assigned only once need a version number? Probably not: plain `y` until it's reassigned.
+- Recursion (`def f(t): … f(…)`) gives a call stack: show only the innermost function's trees, or each frame's trees in its own group, as Python Tutor does?
+- Self-hosting Pyodide (copying its files into `dist/`) instead of the CDN, if the app should work offline.
+- A lesson that asks the learner to click something would need a `pause()` call; not needed for the planned lessons.
 
 ### 14. Your own templates
 Let people define their own book-style notation, e.g. `pair{x, y} = △ x y`, next to their variables.
@@ -416,7 +434,7 @@ Pan, pinch and drag already work on touch screens; the right-click menu doesn't.
 
 ### 16. Guided lessons (as scripts)
 A **Lessons** panel (a 📖 button, top right). Each lesson loads its trees, explains in 2–3 plain sentences what to look at, and has **Back / Next**. It doesn't check answers.
-- **Each lesson is a commented script** (milestone 13), shipped with the app: its comments are the explanation, Next is Step and Back is step back. So lessons need no engine of their own, and anyone can write one.
+- **Each lesson is a commented Python script** (milestone 13), shipped with the app: its comments are the explanation, Next is Step and Back is step back. So lessons need no engine of their own, and anyone can write one.
 - Proposed, from chapter 3: trees and shapes; adding a branch is application; the K rule; the fork rule F; the stem rule S; `I x = x`; `D` and `S K K x = x`. Maybe one on booleans (milestone 11).
 - Written last on purpose, so the text describes the finished UI.
 
