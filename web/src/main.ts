@@ -1,11 +1,11 @@
 import './style.css'
 import { allRedexes, show, step, type Path, type Rule, type Tree } from './engine'
-import { parseNamed, D } from './parser'
+import { numberTree, parseNamed, toSuperscripts, BOOLEANS, MAX_NUMBER, NUMBERS, QUERIES, TEMPLATES, D } from './parser'
 import { Scene, DEFAULT_PARAMS, type PhysicsParams, type PointHit } from './scene'
 import { idSource, idsAt } from './ids'
 import {
   addFragment, addLeafAt, addTree, collapseChip, emptyWorkspace, expandChip, getTree, joinTrees,
-  moveTree, nameAt, pasteOnto, removeAt, replaceTree, selectTree, setAllBelow, tearOff,
+  moveTree, nameAt, pasteOnto, recogniseResult, removeAt, replaceTree, selectTree, setAllBelow, tearOff,
   type Change, type PlacedTree, type Workspace,
 } from './workspace'
 import {
@@ -13,7 +13,7 @@ import {
   type Fragment, type Marks,
 } from './marks'
 import { carryParts, partsOf, PART_PATHS, RULE_TEXT, type Parts } from './parts'
-import { defineVar, deleteVar, loadVars, lookupIn, nameProblem, saveVars, showNamed, type Vars } from './vars'
+import { defineVar, deleteVar, loadVarsReport, lookupIn, nameProblem, saveVars, showNamed, type Vars } from './vars'
 import {
   atEnd, back, beforeRule, currentWs, describeFrame, forward, nextRuleFrame, reduce, seek, startRun, stepsBefore,
   type Moved, type Run, type Stopped,
@@ -24,6 +24,15 @@ const EXAMPLES: [label: string, text: string][] = [
   ['K(△△)(△△△)', 'K(△△)(△△△)'],
   ['I(△△)', 'I(△△)'],
   ['S K K(△△)', 'S K K(△△)'],
+  ['not true', 'not true'],
+  ['and true false', 'and true false'],
+  ['or false true', 'or false true'],
+  ['succ 0', 'succ 0'],
+  ['isZero (K² △)', 'isZero (K² △)'],
+  ['pred (K³ △)', 'pred (K³ △)'],
+  ['isLeaf K', 'isLeaf K'],
+  ['wait{K, △} (△△)', 'wait{K, △} (△△)'],
+  ['selfApply selfApply', 'selfApply selfApply'],
 ]
 const COLOURS_KEY = 'tree-calculus-colours'
 const VARS_KEY = 'tree-calculus-vars'
@@ -46,7 +55,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="input-row">
       <input id="tree-input" spellcheck="false" autocomplete="off" aria-label="Tree in △ notation"
              placeholder="△(△△)(△△△) or S K K △" />
-      <button id="new-btn" type="button" title="Add the typed tree as a new tree">New</button>
       <button id="var-btn" type="button" title="Make the selected tree a variable">Var</button>
     </div>
     <div class="examples" id="examples"></div>
@@ -77,7 +85,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <p><b>Add</b> (A): click a node to give it a leaf branch, which applies it to △; click empty canvas to start a new tree. <b>Remove</b> (R): click to remove a branch, or a root to remove its tree. Shift-click swaps the two. <b>Move</b> (M): drag any node to tear it off.</p>
     <p>In every mode, drag a tree by its <b>root</b> onto a node of another tree to join them (that node is applied to it). The first click on a dimmed tree selects it.</p>
     <p><b>Reduce:</b> ▶| steps (→), |◀ steps back (←), Space plays and pauses. Click a K/S/F letter to reduce that redex instead. The card above the playback buttons shows the rule; with <b>Colours</b> on, its parts w, x, y, z are coloured in the tree, and ▶| goes in half-steps: the first click applies the rule (the colours follow the parts), the second moves the colours to the next step. Hover a letter to preview that redex.</p>
-    <p><b>Variables:</b> right-click a node → <i>Name this…</i> (or the <b>Var</b> button) to save it as a variable (V, X2, True…). It shows as a chip; type its name or use the Add menu to make more. Right-click a chip to expand it; <i>Expand all</i> / <i>Collapse all</i> do a whole subtree. An open variable shows its name in a hollow tag: click the tag to collapse it. Reductions open a chip only when a rule needs its insides.</p>
+    <p><b>Booleans</b> from the book (§3.5) are built in: true = K, false = K I, and, or, implies, not, iff. Try <i>not true</i> from the Examples. So are the numbers (n = Kⁿ △: zero, succ, isZero, pred), the queries isLeaf, isStem, isFork, and selfApply.</p>
+    <p><b>Book notation:</b> type d{x}, first{p}, second{p}, query{a, b, c}, wait{x, y} and swap{f} with trees for the arguments, e.g. <i>d{K}</i>; they become the tree directly. Powers: <i>K**4 I</i> (shown as <i>K⁴ I</i>) is K(K(K(K I))). Numbers can be typed as digits: <i>3</i> is K³ △.</p>
+    <p><b>Variables:</b> right-click a node → <i>Name this…</i> (or the <b>Var</b> button) to save it as a variable (V, x2, isZero…). It shows as a chip; type its name (names need spaces between them: <i>S K V</i>) or use the Add menu to make more. Right-click a chip to expand it; <i>Expand all</i> / <i>Collapse all</i> do a whole subtree. An open variable shows its name in a hollow tag: click the tag to collapse it. Reductions open a chip only when a rule needs its insides.</p>
     <p><b>Add menu:</b> click a button to add a new tree, or drag it onto a node to attach it there.</p>
     <p><b>Copy and paste:</b> ⌘/Ctrl+C copies the subtree under the pointer (or the selected tree) as △ text; ⌘/Ctrl+V pastes onto the node under the pointer, or as a new tree. Also in the right-click menu.</p>
     <p><b>View:</b> drag empty space or scroll to pan; ctrl/⌘ + scroll or pinch to zoom; F fits everything.</p>
@@ -157,7 +167,8 @@ const newId = idSource()
 
 // --- Variables (milestone 9), saved in the browser ----------------------------------
 
-let vars: Vars = loadVars(readStorage())
+const loaded = loadVarsReport(readStorage())
+let vars: Vars = loaded.vars
 const lookup = (name: string) => lookupIn(vars)(name)
 
 function readStorage(): string | null {
@@ -320,13 +331,20 @@ function renderCard(shown: Shown | null): void {
   ruleCard.innerHTML = segs.map((x) => `<span class="seg">${x}</span>`).join('')
 }
 
-/** Variables a normal form of tree `key` might be: yours, the ones used in
- *  the tree first. (K, I, D and S never: every △△ would become K.) */
+/** Variables a normal form of tree `key` might be: yours (the ones used in
+ *  the tree first), then true and false, but only if the tree used a boolean.
+ *  (K, I, D and S never: every △△ would become K, and true is K too.) */
 function resultCandidates(key: string): { name: string; def: Tree }[] {
   const t = getTree(ws, key)
   const used = new Set(t ? fragmentAt(t.tree, t.ids, ws.marks).marks.map((m) => m.mark.name) : [])
   const mine = [...vars.values()].filter((v) => !v.builtin)
-  return [...mine.filter((v) => used.has(v.name)), ...mine.filter((v) => !used.has(v.name))].map((v) => ({ name: v.name, def: v.tree }))
+  // (isZero and the queries answer with true or false too)
+  const truth = [...BOOLEANS, 'isZero', ...QUERIES].some((b) => used.has(b)) ? ['true', 'false'].map((n) => vars.get(n)!) : []
+  // Numbers, if the tree used them (3, zero, succ, pred): pred 3 ends as 2.
+  const usesNumbers = [...used].some((n) => /^\d+$/.test(n)) || ['zero', 'succ', 'pred'].some((n) => used.has(n))
+  const numbers = usesNumbers ? Array.from({ length: 65 }, (_, n) => ({ name: String(n), tree: numberTree(n).tree })) : []
+  return [...mine.filter((v) => used.has(v.name)), ...mine.filter((v) => !used.has(v.name)), ...truth, ...numbers]
+    .map((v) => ({ name: v.name, def: v.tree }))
 }
 
 /** Apply a change. `typing`: consecutive keystrokes in one tree are one undo
@@ -498,7 +516,10 @@ function canGoForward(): boolean {
   if (!sel) return false
   if (colouring && justDid) return true          // the second half-step is still to come
   if (run?.treeKey === sel.key && !atEnd(run)) return true
-  return step(sel.tree) !== null
+  if (step(sel.tree) !== null) return true
+  // Nothing to reduce, but Play can still show what it is (succ 0 is exactly 1).
+  const candidates = run?.treeKey === sel.key ? (run.recognise ?? []) : resultCandidates(sel.key)
+  return recogniseResult(ws, sel.key, candidates) !== null
 }
 
 function stepForward(): boolean {
@@ -746,7 +767,25 @@ scene.events.onDrop = ({ treeKey, x, y, target }) => {
 
 // --- Input box, examples, buttons, keys ---------------------------------------------
 
+/** Show K**4 as K⁴ in the input box: while typing, once the number is
+ *  finished (a number the cursor is still in stays as typed); on leaving
+ *  the box, all of them. The cursor stays where it was. */
+function superscriptInput(all: boolean): void {
+  const before = input.value
+  if (all) {
+    input.value = toSuperscripts(before, true)
+    return
+  }
+  const caret = input.selectionStart ?? before.length
+  const left = toSuperscripts(before.slice(0, caret), false)
+  const right = toSuperscripts(before.slice(caret), false)
+  if (left + right === before) return
+  input.value = left + right
+  input.setSelectionRange(left.length, left.length)
+}
+
 function onInput(): void {
+  superscriptInput(false)
   let p
   try {
     p = parseNamed(input.value.trim() || '△', lookup)
@@ -763,15 +802,9 @@ function onInput(): void {
 }
 
 input.addEventListener('input', onInput)
-input.addEventListener('blur', () => { lastTypedKey = null })
-
-$<HTMLButtonElement>('#new-btn').addEventListener('click', () => {
-  try {
-    commit(addFragment(ws, parseNamed(input.value.trim() || '△', lookup), newId))
-    errorBox.textContent = ''
-  } catch (e) {
-    errorBox.textContent = (e as Error).message
-  }
+input.addEventListener('blur', () => {
+  lastTypedKey = null
+  superscriptInput(true)
 })
 
 varBtn.addEventListener('click', () => {
@@ -783,11 +816,12 @@ varBtn.addEventListener('click', () => {
 /** Add-menu buttons can be dragged onto the canvas: dropped on a node, that
  *  node is applied to the tree (like a paste); on empty canvas, it's a new
  *  tree there. A plain click still adds it as a new tree. */
-function makeDraggable(b: HTMLButtonElement, text: string): void {
+function makeDraggable(b: HTMLButtonElement, text: string, afterAdd?: () => void): void {
   let dragged = false
   b.addEventListener('click', (e) => {
     if (dragged) { dragged = false; e.preventDefault(); return }
     commit(addFragment(ws, parseNamed(text, lookup), newId))
+    afterAdd?.()
   })
   b.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || (e.target as Element).closest('.delete')) return
@@ -832,17 +866,18 @@ function makeDraggable(b: HTMLButtonElement, text: string): void {
 const ADD_OPEN_KEY = 'tree-calculus-add-open'
 const FILTER_FROM = 8
 let addOpen: Record<string, boolean> = (() => {
-  try { return { examples: false, yours: true, ...JSON.parse(localStorage.getItem(ADD_OPEN_KEY) ?? '{}') } } catch { return { examples: false, yours: true } }
+  const defaults = { booleans: true, numbers: false, queries: false, templates: false, examples: false, yours: true }
+  try { return { ...defaults, ...JSON.parse(localStorage.getItem(ADD_OPEN_KEY) ?? '{}') } } catch { return defaults }
 })()
 let varFilter = ''
 
 function renderAddMenu(): void {
-  const button = (into: HTMLElement, label: string, text: string, title = `Add ${text} as a new tree (or drag it onto a node)`) => {
+  const button = (into: HTMLElement, label: string, text: string, title = `Add ${text} as a new tree (or drag it onto a node)`, afterAdd?: () => void) => {
     const b = document.createElement('button')
     b.type = 'button'
     b.textContent = label
     b.title = title
-    makeDraggable(b, text)
+    makeDraggable(b, text, afterAdd)
     into.append(b)
     return b
   }
@@ -865,7 +900,31 @@ function renderAddMenu(): void {
   basics.innerHTML = '<span class="label">Add</span>'
   examples.append(basics)
   button(basics, '△', '△')
-  for (const v of vars.values()) if (v.builtin) button(basics, v.name, v.name, `Add ${v.name} = ${v.text} (or drag it onto a node)`).classList.add('var')
+  const builtin = (into: HTMLElement, v: { name: string; text: string }) =>
+    button(into, v.name, v.name, `Add ${v.name} = ${v.text} (or drag it onto a node)`).classList.add('var')
+  const grouped = [...BOOLEANS, ...NUMBERS, ...QUERIES]
+  for (const v of vars.values()) if (v.builtin && !grouped.includes(v.name)) builtin(basics, v)
+
+  for (const [key, title, names] of [['booleans', 'Booleans', BOOLEANS], ['numbers', 'Numbers', NUMBERS], ['queries', 'Queries', QUERIES]] as const) {
+    const into = section(key, title)
+    for (const n of names) builtin(into, vars.get(n)!)
+    if (key === 'numbers') {
+      // 0 to 10 by name: n is the book's Kⁿ △ (any number up to MAX_NUMBER can be typed)
+      for (let n = 0; n <= 10; n++) button(into, String(n), String(n), `Add ${n} = ${n ? `K${toSuperscripts(`**${n}`)} △` : '△'} (or drag it onto a node; numbers up to ${MAX_NUMBER} can be typed)`).classList.add('var')
+    }
+  }
+
+  // The book's notation with parameters: adds it with △ for each argument,
+  // then puts the cursor on the first △ in the input box, ready to replace.
+  const tpl = section('templates', 'Templates')
+  for (const [name, t] of Object.entries(TEMPLATES)) {
+    const text = `${name}{${t.params.map(() => '△').join(', ')}}`
+    button(tpl, `${name}{${t.params.join(', ')}}`, text, `Add ${name}{${t.params.join(', ')}} = ${t.body}, with △ for each argument; then type over them`, () => {
+      input.focus()
+      const at = input.value.indexOf('{') + 1
+      input.setSelectionRange(at, at + 1)
+    }).classList.add('var')
+  }
 
   const ex = section('examples', 'Examples')
   for (const [label, text] of EXAMPLES) button(ex, label, text)
@@ -1042,7 +1101,7 @@ function openNameForm(treeKey: string, path: Path, clientX: number, clientY: num
   closeMenu()
   const form = document.createElement('form')
   form.className = 'name-form'
-  form.innerHTML = `<label>Name <input name="name" spellcheck="false" autocomplete="off" maxlength="12" placeholder="V" /></label>
+  form.innerHTML = `<label>Name <input name="name" spellcheck="false" autocomplete="off" maxlength="20" placeholder="V" /></label>
     <button type="submit">Save</button><p class="error"></p>`
   const field = form.querySelector('input')!
   const err = form.querySelector<HTMLParagraphElement>('.error')!
@@ -1182,3 +1241,9 @@ input.value = new URLSearchParams(location.search).get('t') ?? D
 onInput()
 undoStack.length = 0   // the starting tree isn't something to undo
 render()
+
+// Saved variables whose names are now built in were renamed when loading: keep that, and say so once.
+if (loaded.renamed.length) {
+  saveVarsNow()
+  say(`${loaded.renamed.map(([from, to]) => `Your ${from} is now called ${to}`).join('; ')}, because ${loaded.renamed.length === 1 ? 'that name is' : 'those names are'} now built in.`)
+}

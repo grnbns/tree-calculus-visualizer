@@ -263,17 +263,21 @@ export function unfoldFor(ws: Workspace, key: string, path: Path): (Change & { n
 export type Candidate = { readonly name: string; readonly def: Tree }
 
 /** If the whole tree `key` is exactly one of `candidates` (the first that
- *  matches wins), show it as that variable's chip. Null if none matches or
- *  its root is already a variable. */
+ *  matches wins), show it as that variable's chip. Null if none matches, or
+ *  if the whole tree already shows as one of the candidates. Any other chip
+ *  at the root gives way: K applied to I becomes False, a bare K becomes True. */
 export function recogniseResult(ws: Workspace, key: string, candidates: readonly Candidate[]): (Change & { name: string }) | null {
   const placed = getTree(ws, key)
-  if (!placed || ws.marks.has(placed.ids.id)) return null
+  if (!placed) return null
+  const current = ws.marks.get(placed.ids.id)
+  if (current && sameTree(current.def, placed.tree) && candidates.some((c) => c.name === current.name)) return null
   const found = candidates.find((c) => sameTree(c.def, placed.tree))
   if (!found) return null
   const mark = { name: found.name, def: found.def, expanded: false }
-  const absorbed = new Map(insideIds(placed.ids, mark).map((id) => [id, placed.ids.id]))
+  const marks = new Map(ws.marks).set(placed.ids.id, mark)
+  const { absorbed } = revealDiff(placed.ids, ws.marks, marks)
   return {
-    ws: { ...ws, marks: new Map(ws.marks).set(placed.ids.id, mark) },
+    ws: { ...ws, marks },
     absorbed,
     name: found.name,
     message: `The result is exactly ${found.name}.`,

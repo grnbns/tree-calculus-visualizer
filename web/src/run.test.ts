@@ -176,3 +176,55 @@ describe('half-step helpers', () => {
     expect(nextRuleFrame(run, 2)).toBeNull()
   })
 })
+
+describe('booleans (milestone 11)', () => {
+  it('not true plays to the end and is recognised as false', () => {
+    const newId = idSource()
+    const ws = addFragment(emptyWorkspace(), parseNamed('not true'), newId).ws
+    const truth = ['true', 'false'].map((name) => ({ name, def: parse(name) }))
+    let run = startRun(ws, 't1', truth)
+    let r = forward(run, newId)
+    while (!('stopped' in r)) { run = r.run; r = forward(run, newId) }
+    expect(run.frames.at(-1)!.recognised).toBe('false')
+    expect(describeFrame(run)).toMatch(/exactly false$/)
+  })
+})
+
+describe('booleans: every result ends as true or false', () => {
+  const truth = ['true', 'false'].map((name) => ({ name, def: parse(name) }))
+  for (const [text, want] of [['not true', 'false'], ['not false', 'true'], ['iff false false', 'true'], ['and true false', 'false'], ['or false true', 'true']]) {
+    it(`${text} -> ${want}`, () => {
+      const newId = idSource()
+      const ws = addFragment(emptyWorkspace(), parseNamed(text), newId).ws
+      let run = startRun(ws, 't1', truth)
+      let r = forward(run, newId)
+      while (!('stopped' in r)) { run = r.run; r = forward(run, newId) }
+      const t = getTree(currentWs(run), 't1')!
+      expect(currentWs(run).marks.get(t.ids.id)?.name).toBe(want)
+    })
+  }
+})
+
+describe('numbers (milestone 11)', () => {
+  const nums = Array.from({ length: 11 }, (_, n) => ({ name: String(n), def: parse(String(n)) }))
+  const play = (text: string) => {
+    const newId = idSource()
+    const ws = addFragment(emptyWorkspace(), parseNamed(text), newId).ws
+    let run = startRun(ws, 't1', nums)
+    let r = forward(run, newId)
+    while (!('stopped' in r)) { run = r.run; r = forward(run, newId) }
+    const t = getTree(currentWs(run), 't1')!
+    return { run, name: currentWs(run).marks.get(t.ids.id)?.name }
+  }
+
+  it('succ 0 is already 1: Play shows that as one frame', () => {
+    const { run, name } = play('succ 0')
+    expect(name).toBe('1')
+    expect(run.frames).toHaveLength(2)
+    expect(describeFrame(run)).toBe('This is exactly 1')
+  })
+
+  it('pred 3 ends as 2', () => {
+    expect(play('pred 3').name).toBe('2')
+  })
+})

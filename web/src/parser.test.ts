@@ -50,7 +50,7 @@ describe('names in the input', () => {
   })
 
   it('reduce like the book says: S K K x = x', () => {
-    expect(normalize(parse('SKK(△△△)')).tree).toEqual(parse('△△△'))
+    expect(normalize(parse('S K K(△△△)')).tree).toEqual(parse('△△△'))
   })
 
   it('still rejects other letters', () => {
@@ -78,10 +78,20 @@ describe('names (milestone 9)', () => {
     ({ V: parseNamed('△△△'), True: parseNamed('K'), X2: parseNamed('△') } as Record<string, ReturnType<typeof parseNamed>>)[name]
     ?? builtinLookup(name)
 
-  it('a capital starts a new name; lowercase letters and digits continue it', () => {
-    expect(parse('SKV', lookup)).toEqual(applyAll(parse(S), parse(K), parse('△△△')))
-    expect(parse('KTrue', lookup)).toEqual(apply(parse(K), parse(K)))
-    expect(parse('X2X2', lookup)).toEqual([[]])
+  it('names need spaces between them; letters of either case and digits continue a name', () => {
+    expect(parse('S K V', lookup)).toEqual(applyAll(parse(S), parse(K), parse('△△△')))
+    expect(parse('K True', lookup)).toEqual(apply(parse(K), parse(K)))
+    expect(parse('X2', lookup)).toEqual([])
+    expect(parse('K△', lookup)).toEqual(apply(parse(K), []))           // no space needed next to △
+    expect(parse('K(K I)')).toEqual(apply(parse(K), apply(parse(K), parse(I))))
+    expect(parse('  S   K\tK  ')).toEqual(applyAll(parse(S), parse(K), parse(K)))
+    expect(normalize(parse('not true')).tree).toEqual(parse('K I'))   // book spelling, lowercase
+  })
+
+  it('names run together are one (unknown) name, with a hint', () => {
+    expect(() => parse('SKV', lookup)).toThrow(/unknown name 'SKV'.*'S K V'/)
+    expect(() => parse('KTrue', lookup)).toThrow(/'K True'/)
+    expect(() => parse('Qz')).toThrow(/^unknown name 'Qz' at 0$/)
   })
 
   it('rejects unknown names, naming them', () => {

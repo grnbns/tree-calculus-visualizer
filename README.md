@@ -16,19 +16,27 @@ These are the book's rules. treecalcul.us uses a different variant, so its examp
 
 ## What you can do
 
-- **Build trees.** Type △ notation in the input box (`.` and `^` work as aliases for `△`), or click nodes to add branches. Use the modes at the top right: **Add** (A), **Remove** (R), **Move** (M). In Add mode, clicking empty canvas starts a new tree. The **Add** menu (top left) has △, K, I, D and S, plus foldable **Examples** and **Yours** sections. Click a button to add a new tree, or drag it onto a node to attach it.
+- **Build trees.** Type △ notation in the input box (`.` and `^` work as aliases for `△`), or click nodes to add branches. Use the modes at the top right: **Add** (A), **Remove** (R), **Move** (M). In Add mode, clicking empty canvas starts a new tree. The **Add** menu (top left) has △, K, I, D, S and `selfApply`, plus foldable sections: **Booleans**, **Numbers**, **Queries**, **Templates**, **Examples** and **Yours**. Click a button to add a new tree, or drag it onto a node to attach it.
 - **Join trees.** Drag a tree by its root onto a node of another tree; that node is applied to it. In Move mode, drag any node to tear its subtree off.
 - **Reduce.** Every redex has an orange border and a K, S or F letter. Click a letter to reduce that redex, or use **▶|** (→) to reduce the next one: its letter sits on a filled orange tag. **Play** (Space) runs to a normal form. **|◀** (←) and the scrubber move back and forth through the reduction like a video, and the line above the buttons says which step you're on.
 - **See each rule.** The card above the playback buttons shows the rule being used, e.g. `△(△x)yz → yz(xz)`, and what x, y and z are in your tree. The left side of the equation is lit before the rule fires and the right side after.
   - With **Colours** on, the parts are coloured in the tree as well: w teal, x blue, y green, z pink. Hover a letter to preview that redex.
   - **▶|** then goes in two halves. The first click applies the rule while the colours stay on the parts as they move; the second moves the colours on to the next step.
   - Once you start stepping, any variable that hides a coloured part opens just enough to show it.
-- **Variables.** K, I, D and S are built in. Right-click a node and choose **Name this…** to save a subtree as your own variable, e.g. `V`, `X2` or `True`. Variables are saved in your browser.
-  - A variable shows as a single labelled chip, and typing its name works: `SKV` reads as `S K V`.
+- **Trees from the book.** These are built in, under the book's names:
+  - the booleans from §3.5: `true` (= K), `false` (= K I), `and`, `or`, `implies`, `not`, `iff`
+  - the numbers from §3.7: `zero`, `succ`, `isZero`, `pred`, and any number written as digits (`3` is K³ △)
+  - the queries from §3.8: `isLeaf`, `isStem`, `isFork`
+  - `selfApply` from §4.3
+
+  When a reduction ends in exactly `true`, `false` or a number, the result shows as that chip: `not true` ends as `false`, `pred 3` as `2`.
+- **The book's notation.** You can type the book's templates directly: `d{x}`, `first{p}`, `second{p}`, `query{a, b, c}`, `wait{x, y}` and `swap{f}`, with trees as the arguments (e.g. `d{K}`). They become the tree right away. Powers like `K**4 I` mean K(K(K(K I))) and are shown as `K⁴ I`.
+- **Variables.** Your own variables work like the built-in ones. Right-click a node and choose **Name this…** to save a subtree as your own variable, e.g. `V`, `x2` or `isEven`. Variables are saved in your browser.
+  - A variable shows as a single labelled chip, and typing its name works. A name is a letter followed by letters or digits, and names need spaces between them: `S K V`.
   - Right-click a chip to expand it, or use **Expand all** / **Collapse all** on a whole subtree. An open variable shows its name in a small hollow tag; click the tag to collapse it.
   - The **Var** button names the selected tree.
   - During a reduction, a chip stays closed while it is only moved or copied. It opens only when a rule needs to look inside it.
-  - If a reduction ends in exactly one of your variables, the result folds back into its chip.
+  - If a reduction ends in exactly one of your variables, the result folds back into its chip. Play on a tree that's already a value shows what it is: `succ 0` becomes `1`.
 - **Copy and paste.** ⌘/Ctrl+C copies the subtree under the pointer as △ text. ⌘/Ctrl+V pastes onto the node under the pointer, or as a new tree on empty canvas. The right-click menu does the same.
 - **Undo and redo** (⌘/Ctrl+Z, ⌘/Ctrl+Shift+Z). A whole reduction counts as one action.
 - **View.** Drag empty space or scroll to pan. Pinch, or ⌘/Ctrl + scroll, to zoom. **F** fits everything on screen, and **?** shows help.
@@ -51,7 +59,7 @@ The app is TypeScript with Vite, d3-force for the physics and d3-hierarchy for t
 
 | File | What it does |
 |---|---|
-| `engine.ts`, `parser.ts` | Pure reduction engine and △ parser (with names). Trees are immutable nested arrays: `[]` is a leaf. |
+| `engine.ts`, `parser.ts` | Pure reduction engine and △ parser (with names, numbers, powers and the book's templates). Trees are immutable nested arrays: `[]` is a leaf. |
 | `ids.ts` | Stable node ids, kept beside each tree, so animation can match nodes from one step to the next. |
 | `marks.ts`, `vars.ts` | Variables: which subtrees show as chips, and when a step has to open one. Also definitions and browser storage. |
 | `parts.ts` | Which nodes are w, x, y and z in a rule, before and after it fires (for the colours). |
@@ -67,4 +75,4 @@ The repository root has the original Python engine (`reduction_logic.py`, `parse
 
 ## Status
 
-See [PLAN.md](PLAN.md) for the milestones. Milestones 0–10 are done: engine, drawing, motion, building, reducing, the full-screen canvas, copy, paste and variables, and the rule card and colours for learners. Next are the book's booleans as built-in variables, a Settings panel with other ways to view a tree (radial and organic), guided lessons, and touch support. A public deploy comes last.
+See [PLAN.md](PLAN.md) for the milestones. Milestones 0–11 are done: engine, drawing, motion, building, reducing, the full-screen canvas, copy, paste and variables, the rule card and colours for learners, and the book's trees and notation. Next are a Settings panel with other ways to view a tree (radial and organic), guided lessons, defining your own templates, and touch support. A public deploy comes last.

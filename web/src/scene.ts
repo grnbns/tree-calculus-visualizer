@@ -38,7 +38,7 @@ import {
 } from './camera'
 import {
   CHIP_HEIGHT, COMPUTATION_RADIUS, NODE_RADIUS,
-  chipWidth, layoutTree, samePath, type ChipsByPath, type NodeKind,
+  chipLabel, chipWidth, layoutTree, samePath, type ChipsByPath, type NodeKind,
 } from './render'
 
 // --- Tuning ----------------------------------------------------------------
@@ -532,7 +532,7 @@ export class Scene {
           const rect = g.querySelector('.chip rect')!
           rect.setAttribute('width', String(w))
           rect.setAttribute('x', String(-w / 2))
-          g.querySelector('.chip text')!.textContent = ln.chip
+          g.querySelector('.chip text')!.textContent = chipLabel(ln.chip)
         }
         g.setAttribute('class', classes.join(' '))
         g.querySelector('.dot')!.setAttribute('r', String(ln.kind === 'computation' ? COMPUTATION_RADIUS : NODE_RADIUS))
@@ -543,13 +543,13 @@ export class Scene {
         const open = t.openVars?.get(ln.path.join('.'))
         g.classList.toggle('open-var', !!open)
         if (open) {
-          const tw = 8 + open.name.length * 5.6
+          const tw = 8 + chipLabel(open.name).length * 5.6
           const tag = g.querySelector('.open-tag')!
           tag.setAttribute('transform', `translate(${-(BADGE_OFFSET + tw / 2 - 6)},${-BADGE_OFFSET})`)
           const rect = tag.querySelector('rect')!
           rect.setAttribute('width', String(tw))
           rect.setAttribute('x', String(-tw / 2))
-          tag.querySelector('text')!.textContent = open.name
+          tag.querySelector('text')!.textContent = chipLabel(open.name)
           tag.querySelector('title')!.textContent = `${open.name} is expanded: click to collapse it`
         }
         const where = ln.path.length ? `at [${ln.path.join(', ')}]` : '(root)'

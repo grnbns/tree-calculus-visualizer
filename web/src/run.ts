@@ -89,6 +89,13 @@ export function reduce(run: Run, newId: IdSource, at?: Path): Moved | Stopped {
   const unfolded = unfold && makeRoom(unfold.ws, run.treeKey)
   const s = path ? stepTree(unfolded ?? ws, run.treeKey, newId, path) : null
   if (!s) {
+    // Nothing to reduce, but the tree may already be exactly a variable
+    // (succ 0 is 1): show that once, as a frame of its own.
+    const known = !run.frames[run.pos].recognised && !at ? recogniseResult(ws, run.treeKey, run.recognise ?? []) : null
+    if (known) {
+      const frames = [...run.frames.slice(0, run.pos + 1), { ws: known.ws, recognised: known.name, absorbed: known.absorbed }]
+      return { run: { ...run, frames, pos: frames.length - 1 }, absorbed: known.absorbed }
+    }
     return {
       stopped: 'normal',
       message: steps ? `Reached a normal form after ${steps} step${steps === 1 ? '' : 's'}.` : 'Nothing to reduce: this tree is a value.',
@@ -152,7 +159,7 @@ export function describeFrame(run: Run, i = run.pos): string {
   const k = stepsBefore(run, i)
   if (i === 0) return 'Start'
   const f = run.frames[i]
-  if (f.recognised) return `After step ${k}: the result is exactly ${f.recognised}`
+  if (f.recognised) return k ? `After step ${k}: the result is exactly ${f.recognised}` : `This is exactly ${f.recognised}`
   if (f.unfold) return `Before step ${k + 1}: unfold ${f.unfold.join(', ')}, because the rule looks inside`
   const where = f.path && f.path.length ? `at [${f.path.join(', ')}]` : 'at the root'
   return `Step ${k}: ${f.rule} rule ${where}`

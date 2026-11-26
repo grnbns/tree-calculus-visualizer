@@ -40,7 +40,10 @@ export const COMPUTATION_RADIUS = 7.5  // nodes with 3+ branches (drawn orange)
 // Chips (collapsed variables): a rounded box around the name.
 export const CHIP_HEIGHT = 18
 const CHIP_CHAR_WIDTH = 7.5
-export const chipWidth = (name: string) => Math.max(CHIP_HEIGHT, 10 + name.length * CHIP_CHAR_WIDTH)
+/** A chip's label: long ones (like a template call `query{K, K I, K I}`)
+ *  are cut short; the full name is in the tooltip. */
+export const chipLabel = (name: string) => (name.length > 12 ? name.slice(0, 11) + '…' : name)
+export const chipWidth = (name: string) => Math.max(CHIP_HEIGHT, 10 + chipLabel(name).length * CHIP_CHAR_WIDTH)
 
 export function kindOf(t: Tree): NodeKind {
   switch (t.length) {

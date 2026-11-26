@@ -149,7 +149,7 @@ describe('stepTree', () => {
 
   it('agrees with normalize', () => {
     const newId = idSource()
-    const t = parse('SKK(△△△)')
+    const t = parse('S K K(△△△)')
     let ws = addTree(emptyWorkspace(), t, newId).ws
     for (let s = stepTree(ws, 't1', newId); s; s = stepTree(ws, 't1', newId)) ws = s.ws
     expect(getTree(ws, 't1')!.tree).toEqual(normalize(t).tree)

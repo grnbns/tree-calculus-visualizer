@@ -6,7 +6,7 @@
 // Pure functions; main.ts does the actual saving.
 
 import { LEAF, show, type Path, type Tree } from './engine'
-import { BUILTIN_TEXT, NAME_RE, builtinLookup, parse, type Lookup, type Parsed } from './parser'
+import { BUILTIN_TEXT, NAME_RE, TEMPLATES, builtinLookup, parse, type Lookup, type Parsed } from './parser'
 import { arity, fits, pathKey, type Fragment, type PathMark, type VarMark } from './marks'
 
 export type VarDef = Parsed & {
@@ -32,8 +32,9 @@ export function lookupIn(vars: Vars): Lookup {
 
 /** Why `name` can't be used for a new variable, or null if it can. */
 export function nameProblem(vars: Vars, name: string): string | null {
-  if (!NAME_RE.test(name)) return 'A name is a capital letter, then optionally lowercase letters or digits (V, X2, True).'
+  if (!NAME_RE.test(name)) return 'A name is a letter, then any letters or digits (V, x2, isZero).'
   if (vars.get(name)?.builtin) return `${name} is built in and can't be redefined.`
+  if (name in TEMPLATES) return `${name} is the book's notation ${name}{…}, so it can't be a variable's name.`
   return null
 }
 
@@ -96,21 +97,46 @@ export function saveVars(vars: Vars): string {
 
 /** Built-ins plus the variables saved by saveVars. Bad entries are skipped. */
 export function loadVars(json: string | null): Vars {
+  return loadVarsReport(json).vars
+}
+
+/** Like loadVars, and also reports saved variables that had to be renamed
+ *  because their name is now built in (your `True` becomes `True1`). */
+export function loadVarsReport(json: string | null): { vars: Vars; renamed: [from: string, to: string][] } {
   const vars = new Map(builtinVars())
-  if (!json) return vars
+  const renamed: [string, string][] = []
+  if (!json) return { vars, renamed }
   let list: unknown
-  try { list = JSON.parse(json) } catch { return vars }
-  if (!Array.isArray(list)) return vars
-  for (const s of list as Saved[]) {
+  try { list = JSON.parse(json) } catch { return { vars, renamed } }
+  if (!Array.isArray(list)) return { vars, renamed }
+  const saved = list as Saved[]
+  // A saved name that is now built in gets a number added, and so does every
+  // use of it inside other saved definitions.
+  const taken = new Set([...vars.keys(), ...saved.map((v) => v?.name)])
+  const rename = new Map<string, string>()
+  for (const v of saved) {
+    if (!vars.get(v?.name)?.builtin && !(v?.name in TEMPLATES)) continue
+    let n = 1
+    while (taken.has(`${v.name}${n}`)) n++
+    rename.set(v.name, `${v.name}${n}`)
+    taken.add(`${v.name}${n}`)
+  }
+  for (const s of saved) {
     try {
-      if (nameProblem(vars, s.name)) continue
+      const name = rename.get(s.name) ?? s.name
+      if (nameProblem(vars, name)) continue
       const tree = parse(s.tree)
-      const marks: PathMark[] = s.marks.map((m) => ({ path: m.path, mark: { name: m.name, def: parse(m.def), expanded: false } }))
+      const marks: PathMark[] = s.marks.map((m) => ({
+        path: m.path,
+        mark: { name: rename.get(m.name) ?? m.name, def: parse(m.def), expanded: false },
+      }))
       if (!marks.every((m) => { const t = at(tree, m.path); return t !== undefined && fits(t, m.mark) })) continue
-      vars.set(s.name, { name: s.name, text: s.text, tree, marks, builtin: false })
+      const touched = name !== s.name || s.marks.some((m) => rename.has(m.name))
+      vars.set(name, { name, text: touched ? showNamed(tree, marks) : s.text, tree, marks, builtin: false })
+      if (name !== s.name) renamed.push([s.name, name])
     } catch { /* skip it */ }
   }
-  return vars
+  return { vars, renamed }
 }
 
 function at(t: Tree, path: readonly number[]): Tree | undefined {
