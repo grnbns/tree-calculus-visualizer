@@ -179,3 +179,54 @@ export function isHidden(ids: IdTree, marks: Marks, path: Path): boolean {
   }
   return false
 }
+
+// --- Showing and hiding (milestone 10 follow-ups) -----------------------------
+
+/** For every node hidden inside a collapsed chip: the outermost chip hiding it. */
+export function hiddenBy(ids: IdTree, marks: Marks): Map<string, string> {
+  const out = new Map<string, string>()
+  const visit = (t: IdTree, hider: string | null) => {
+    if (hider) out.set(t.id, hider)
+    const m = marks.get(t.id)
+    const n = m && !m.expanded ? arity(m) : 0
+    t.children.forEach((c, i) => visit(c, hider ?? (i < n ? t.id : null)))
+  }
+  visit(ids, null)
+  return out
+}
+
+/** Going from `before` to `after`: nodes that appear sprout out of the chip
+ *  that hid them (`born`), nodes that disappear slide into the chip that now
+ *  hides them (`absorbed`). */
+export function revealDiff(ids: IdTree, before: Marks, after: Marks): { born: Map<string, string>; absorbed: Map<string, string> } {
+  const was = hiddenBy(ids, before)
+  const now = hiddenBy(ids, after)
+  const born = new Map([...was].filter(([id]) => !now.has(id)))
+  const absorbed = new Map([...now].filter(([id]) => !was.has(id)))
+  return { born, absorbed }
+}
+
+/** Ids of every marked node in the subtree at `path` (hidden ones too). */
+export function marksBelow(ids: IdTree, marks: Marks, path: Path = []): string[] {
+  return allIdsOf(idsAt(ids, path)).filter((id) => marks.has(id))
+}
+
+function allIdsOf(t: IdTree, out: string[] = []): string[] {
+  out.push(t.id)
+  for (const c of t.children) allIdsOf(c, out)
+  return out
+}
+
+/** Every visible expanded variable, by path key: these can be collapsed. */
+export function openVariables(ids: IdTree, marks: Marks): Map<string, Chip> {
+  const out = new Map<string, Chip>()
+  if (marks.size === 0) return out
+  const hidden = hiddenBy(ids, marks)
+  const visit = (t: IdTree, path: Path) => {
+    const m = marks.get(t.id)
+    if (m?.expanded && !hidden.has(t.id)) out.set(pathKey(path), { id: t.id, name: m.name, arity: arity(m) })
+    t.children.forEach((c, i) => visit(c, [...path, i]))
+  }
+  visit(ids, [])
+  return out
+}

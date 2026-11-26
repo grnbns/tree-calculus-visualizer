@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { atEnd, back, currentWs, describeFrame, forward, reduce, seek, startRun, stepsBefore, MAX_RUN_STEPS, type Moved, type Run, type Stopped } from './run'
+import { atEnd, back, currentWs, describeFrame, forward, reduce, seek, startRun, stepsBefore, nextRuleFrame, beforeRule, MAX_RUN_STEPS, type Moved, type Run, type Stopped } from './run'
 import { addFragment, addTree, emptyWorkspace, getTree } from './workspace'
 import { allIds, idSource } from './ids'
 import { parse, parseNamed, I } from './parser'
@@ -86,8 +86,8 @@ describe('a reduction run', () => {
   it('describes frames', () => {
     let { newId, run } = setup(`${I}(△△)`)
     run = moved(forward(run, newId)).run
-    expect(describeFrame(run)).toBe('Step 1 of 1: S rule at the root')
-    expect(describeFrame(run, 0)).toBe('Start (1 step recorded)')
+    expect(describeFrame(run)).toBe('Step 1: S rule at the root')
+    expect(describeFrame(run, 0)).toBe('Start')
   })
 })
 
@@ -102,7 +102,7 @@ describe('runs with variables (milestone 9)', () => {
     let { newId, run } = setupNamed('K I D')
     run = moved(forward(run, newId)).run
     expect(run.frames[1].unfold).toEqual(['K'])
-    expect(describeFrame(run)).toBe('Step 1 of 2: unfold K, because the next rule looks inside')
+    expect(describeFrame(run)).toBe('Before step 1: unfold K, because the rule looks inside')
     expect(treeOf(run)).toEqual(parse('K I D'))          // unfolding changes no tree
     run = moved(forward(run, newId)).run
     expect(run.frames[2].rule).toBe('K')
@@ -135,5 +135,44 @@ describe('runs with variables (milestone 9)', () => {
     const steps = run.frames.filter((f) => f.rule).length
     expect(run.frames.some((f) => f.unfold)).toBe(true)
     expect(r.message).toBe(`Reached a normal form after ${steps} steps.`)
+  })
+})
+
+describe('recognising the result (milestone 10)', () => {
+  it('a normal form equal to a variable folds into its chip, as its own frame', () => {
+    const newId = idSource()
+    const ws = addFragment(emptyWorkspace(), parseNamed('K (△△△) △'), newId).ws
+    let run = startRun(ws, 't1', [{ name: 'V', def: parse('△△△') }])
+    let r = forward(run, newId)
+    while (!('stopped' in r)) { run = r.run; r = forward(run, newId) }
+    const last = run.frames.at(-1)!
+    expect(last.recognised).toBe('V')
+    expect(describeFrame(run)).toMatch(/the result is exactly V/)
+    const t = getTree(currentWs(run), 't1')!
+    expect(currentWs(run).marks.get(t.ids.id)).toMatchObject({ name: 'V', expanded: false })
+    expect(last.absorbed!.size).toBe(2)
+    // stepping back brings the nodes out of the chip again
+    expect(moved(back(run)!).born!.size).toBe(2)
+  })
+
+  it('no match, or no candidates: nothing extra', () => {
+    const newId = idSource()
+    const ws = addFragment(emptyWorkspace(), parseNamed('K (△△) △'), newId).ws
+    let run = startRun(ws, 't1', [{ name: 'V', def: parse('△△△') }])
+    let r = forward(run, newId)
+    while (!('stopped' in r)) { run = r.run; r = forward(run, newId) }
+    expect(run.frames.some((f) => f.recognised)).toBe(false)
+  })
+})
+
+describe('half-step helpers', () => {
+  it('skip unfold frames in both directions', () => {
+    const newId = idSource()
+    const ws = addFragment(emptyWorkspace(), parseNamed('K I D'), newId).ws
+    let run = startRun(ws, 't1')
+    run = moved(forward(run, newId)).run            // frames: 0 start, 1 unfold K, 2 K rule
+    expect(nextRuleFrame(run, 0)).toBe(2)
+    expect(beforeRule(run, 2)).toBe(0)
+    expect(nextRuleFrame(run, 2)).toBeNull()
   })
 })

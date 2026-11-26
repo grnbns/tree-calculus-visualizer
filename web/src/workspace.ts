@@ -8,7 +8,7 @@ import { step, stepAt, type Path, type Rule, type Tree } from './engine'
 import { addLeaf, attach, detach, removeBranch, subtreeAt } from './edit'
 import { allIds, freshIds, idsAt, stepIds, type IdSource, type IdTree } from './ids'
 import {
-  NO_MARKS, carryMarks, chipsToUnfold, collapsedChips, insideIds, placeMarks, pruneMarks, setExpanded,
+  NO_MARKS, carryMarks, chipsToUnfold, collapsedChips, insideIds, marksBelow, placeMarks, pruneMarks, revealDiff, sameTree, setExpanded,
   type Fragment, type Marks, type PathMark,
 } from './marks'
 import { layoutTree } from './render'
@@ -259,6 +259,27 @@ export function unfoldFor(ws: Workspace, key: string, path: Path): (Change & { n
   }
 }
 
+/** A variable a result might turn out to be (milestone 10). */
+export type Candidate = { readonly name: string; readonly def: Tree }
+
+/** If the whole tree `key` is exactly one of `candidates` (the first that
+ *  matches wins), show it as that variable's chip. Null if none matches or
+ *  its root is already a variable. */
+export function recogniseResult(ws: Workspace, key: string, candidates: readonly Candidate[]): (Change & { name: string }) | null {
+  const placed = getTree(ws, key)
+  if (!placed || ws.marks.has(placed.ids.id)) return null
+  const found = candidates.find((c) => sameTree(c.def, placed.tree))
+  if (!found) return null
+  const mark = { name: found.name, def: found.def, expanded: false }
+  const absorbed = new Map(insideIds(placed.ids, mark).map((id) => [id, placed.ids.id]))
+  return {
+    ws: { ...ws, marks: new Map(ws.marks).set(placed.ids.id, mark) },
+    absorbed,
+    name: found.name,
+    message: `The result is exactly ${found.name}.`,
+  }
+}
+
 function findIds(t: IdTree, id: string): IdTree | undefined {
   if (t.id === id) return t
   for (const c of t.children) {
@@ -314,4 +335,19 @@ export function makeRoom(ws: Workspace, key: string): Workspace {
   }
   if (moved.size === 0) return ws
   return { ...ws, trees: ws.trees.map((t) => (moved.has(t.key) ? { ...t, x: moved.get(t.key)! } : t)) }
+}
+
+/** Expand (or collapse) every variable in the subtree at `path`, the node's
+ *  own included. Nodes sprout out of (or slide into) their chips. */
+export function setAllBelow(ws: Workspace, key: string, path: Path, expanded: boolean): Change {
+  const placed = getTree(ws, key)!
+  const ids = marksBelow(placed.ids, ws.marks, path)
+  const marks = setExpanded(ws.marks, ids, expanded)
+  const { born, absorbed } = revealDiff(placed.ids, ws.marks, marks)
+  return {
+    ws: { ...ws, marks },
+    born,
+    absorbed,
+    message: `${expanded ? 'Expanded' : 'Collapsed'} every variable ${path.length ? `under [${path.join(', ')}]` : 'in this tree'}.`,
+  }
 }

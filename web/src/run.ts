@@ -9,7 +9,7 @@
 
 import { size, step, type Path, type Rule } from './engine'
 import { allIds, type IdSource } from './ids'
-import { getTree, makeRoom, stepTree, unfoldFor, type Workspace } from './workspace'
+import { getTree, makeRoom, recogniseResult, stepTree, unfoldFor, type Candidate, type Workspace } from './workspace'
 
 export type Frame = {
   ws: Workspace
@@ -22,12 +22,18 @@ export type Frame = {
   /** instead of a rule: these variables unfolded, because the next rule
    *  needs to look inside them (milestone 9) */
   unfold?: readonly string[]
+  /** instead of a rule: the normal form turned out to be this variable,
+   *  so it folded into its chip (`absorbed`: its nodes -> the chip) */
+  recognised?: string
+  absorbed?: ReadonlyMap<string, string>
 }
 
 export type Run = {
   treeKey: string
   frames: readonly Frame[]
   pos: number
+  /** variables the normal form may turn out to be (first match wins) */
+  recognise?: readonly Candidate[]
 }
 
 /** Play stops after this many steps in one run (a tree may never finish). */
@@ -38,8 +44,8 @@ export const MAX_NODES = 1500
 export type Moved = { run: Run; born?: ReadonlyMap<string, string>; absorbed?: ReadonlyMap<string, string> }
 export type Stopped = { stopped: 'normal' | 'limit' | 'size'; message: string }
 
-export function startRun(ws: Workspace, treeKey: string): Run {
-  return { treeKey, frames: [{ ws }], pos: 0 }
+export function startRun(ws: Workspace, treeKey: string, recognise: readonly Candidate[] = []): Run {
+  return { treeKey, frames: [{ ws }], pos: 0, recognise }
 }
 
 export function currentWs(run: Run): Workspace {
@@ -52,7 +58,8 @@ export const atEnd = (run: Run) => run.pos === run.frames.length - 1
 export function forward(run: Run, newId: IdSource): Moved | Stopped {
   if (!atEnd(run)) {
     const pos = run.pos + 1
-    return { run: { ...run, pos }, born: run.frames[pos].born }
+    const f = run.frames[pos]
+    return { run: { ...run, pos }, born: f.born, absorbed: f.absorbed }
   }
   return reduce(run, newId)
 }
@@ -89,7 +96,12 @@ export function reduce(run: Run, newId: IdSource, at?: Path): Moved | Stopped {
   }
   const added: Frame[] = []
   if (unfold && unfolded) added.push({ ws: unfolded, unfold: unfold.names, born: unfold.born })
-  added.push({ ws: makeRoom(s.ws, run.treeKey), rule: s.rule, path: s.path, born: s.born })
+  const stepped = makeRoom(s.ws, run.treeKey)
+  added.push({ ws: stepped, rule: s.rule, path: s.path, born: s.born })
+  // At a normal form, the result may be exactly a variable: fold it into its chip.
+  const done = getTree(stepped, run.treeKey)
+  const known = done && step(done.tree) === null ? recogniseResult(stepped, run.treeKey, run.recognise ?? []) : null
+  if (known) added.push({ ws: known.ws, recognised: known.name, absorbed: known.absorbed })
   const frames = [...run.frames.slice(0, run.pos + 1), ...added]
   return { run: { ...run, frames, pos: run.pos + 1 }, born: added[0].born }
 }
@@ -104,15 +116,24 @@ function absorbedBetween(run: Run, to: number): Map<string, string> {
   return absorbed
 }
 
+/** Stepping back over a recognised result: its nodes come out of the chip again. */
+function bornBetween(run: Run, to: number): Map<string, string> {
+  const born = new Map<string, string>()
+  for (let i = run.pos; i > to; i--) for (const [inner, chip] of run.frames[i].absorbed ?? []) born.set(inner, chip)
+  return born
+}
+
 export function back(run: Run): Moved | null {
-  return run.pos > 0 ? { run: { ...run, pos: run.pos - 1 }, absorbed: absorbedBetween(run, run.pos - 1) } : null
+  return run.pos > 0
+    ? { run: { ...run, pos: run.pos - 1 }, absorbed: absorbedBetween(run, run.pos - 1), born: bornBetween(run, run.pos - 1) }
+    : null
 }
 
 /** Jump to frame `pos`. Nodes copied along the way sprout from the oldest
  *  ancestor still on screen, so a big jump still animates sensibly. */
 export function seek(run: Run, pos: number): Moved {
   pos = Math.max(0, Math.min(pos, run.frames.length - 1))
-  if (pos <= run.pos) return { run: { ...run, pos }, absorbed: absorbedBetween(run, pos) }
+  if (pos <= run.pos) return { run: { ...run, pos }, absorbed: absorbedBetween(run, pos), born: bornBetween(run, pos) }
   const onScreen = new Set(getTree(currentWs(run), run.treeKey) ? allIds(getTree(currentWs(run), run.treeKey)!.ids) : [])
   const merged = new Map<string, string>()
   for (let i = run.pos + 1; i <= pos; i++) for (const [k, v] of run.frames[i].born ?? []) merged.set(k, v)
@@ -127,10 +148,33 @@ export function seek(run: Run, pos: number): Moved {
 
 /** Short description of frame `i`, e.g. "Step 3 of 16: K at [1, 0]". */
 export function describeFrame(run: Run, i = run.pos): string {
-  const total = run.frames.length - 1
-  if (i === 0) return `Start (${total} step${total === 1 ? '' : 's'} recorded)`
+  // Numbers count rule steps only: unfolds and a recognised result aren't steps.
+  const k = stepsBefore(run, i)
+  if (i === 0) return 'Start'
   const f = run.frames[i]
-  if (f.unfold) return `Step ${i} of ${total}: unfold ${f.unfold.join(', ')}, because the next rule looks inside`
+  if (f.recognised) return `After step ${k}: the result is exactly ${f.recognised}`
+  if (f.unfold) return `Before step ${k + 1}: unfold ${f.unfold.join(', ')}, because the rule looks inside`
   const where = f.path && f.path.length ? `at [${f.path.join(', ')}]` : 'at the root'
-  return `Step ${i} of ${total}: ${f.rule} rule ${where}`
+  return `Step ${k}: ${f.rule} rule ${where}`
+}
+
+// --- Half-steps (with colours on) -----------------------------------------------
+//
+// With colours on, the unfold frames are shown by the preview itself, so
+// moving through a run skips them.
+
+/** The next rule frame after `pos`, skipping unfold frames; null if none recorded. */
+export function nextRuleFrame(run: Run, pos = run.pos): number | null {
+  for (let i = pos + 1; i < run.frames.length; i++) {
+    if (run.frames[i].rule) return i
+    if (!run.frames[i].unfold) return null
+  }
+  return null
+}
+
+/** The frame before the rule at `pos`, skipping unfold frames. */
+export function beforeRule(run: Run, pos = run.pos): number {
+  let i = pos - 1
+  while (i > 0 && run.frames[i].unfold) i--
+  return Math.max(i, 0)
 }

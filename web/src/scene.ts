@@ -31,6 +31,7 @@ import {
 } from 'd3-force'
 import type { Path, Redex, Tree } from './engine'
 import type { IdTree } from './ids'
+import type { Parts } from './parts'
 import {
   fitBounds, lerpCamera, panBy, reveal, unionBounds, viewBox, zoomAt,
   type Bounds, type Camera, type Point, type Size,
@@ -199,6 +200,7 @@ export type SceneTree = {
   nextRedex: Path | null // strongly ringed: what Step will reduce
   redexes?: readonly Redex[] // every redex: a clickable K/S/F badge
   chips?: ChipsByPath    // collapsed variables, drawn as labelled chips
+  openVars?: ReadonlyMap<string, { readonly name: string }>  // expanded variables (by path key): a tag to collapse them
 }
 
 export type NodeHit = { treeKey: string; path: Path; shiftKey: boolean }
@@ -209,6 +211,8 @@ export type PointHit = { node: { treeKey: string; path: Path; id: string } | nul
 export type SceneEvents = {
   /** A press and release without moving: a click on a node. */
   onClick?: (hit: NodeHit) => void
+  /** The pointer moved onto (or off: null) a redex's K/S/F badge. */
+  onRedexHover?: (redex: { treeKey: string; path: Path } | null) => void
   /** A click on a redex's K/S/F badge: reduce that redex. */
   onRedexClick?: (redex: { treeKey: string; path: Path }) => void
   /** A node started being dragged; (x, y) is where it is. The handler may
@@ -217,6 +221,10 @@ export type SceneEvents = {
   /** A whole tree (dragged by its root) was let go at (x, y), over `target`
    *  (a node of another tree) or over empty space (`target` null). */
   onDrop?: (drop: { treeKey: string; x: number; y: number; target: { treeKey: string; path: Path } | null }) => void
+  /** A click on an expanded variable's name tag: collapse it. */
+  onCollapseClick?: (node: { treeKey: string; path: Path }) => void
+  /** A click (press and release without moving) on empty canvas, in world coordinates. */
+  onCanvasClick?: (at: { x: number; y: number }) => void
   /** Right-click (or long press) on a node or on empty canvas. */
   onContextMenu?: (hit: PointHit & { clientX: number; clientY: number }) => void
 }
@@ -248,6 +256,7 @@ export class Scene {
    *  every node of it, with its offset from the root. */
   private dragging: { node: SimNode; pointerId: number; carry: Map<SimNode, { dx: number; dy: number }> | null } | null = null
   private dropTarget: SimNode | null = null
+  private parts: Parts = new Map()
   private warnedAboutOrder = false
 
   // The camera, and the canvas size in screen pixels.
@@ -257,6 +266,8 @@ export class Scene {
   private glide: { from: Camera; to: Camera; start: number; frame: number } | null = null
   /** Pointers panning (one) or pinch-zooming (two) on empty canvas: last client position. */
   private panPointers = new Map<number, Point>()
+  /** A press on empty canvas that may still turn out to be a click. */
+  private canvasPress: { id: number; x: number; y: number } | null = null
   /** World-space bounds of each tree's tidy layout, from the last setWorkspace. */
   private treeBounds = new Map<string, Bounds>()
 
@@ -484,7 +495,9 @@ export class Scene {
           badge.append(svgEl('rect', { x: -5.5, y: -6.5, width: 11, height: 13, rx: 3 }), svgEl('text', { 'text-anchor': 'middle', dy: '0.35em' }), svgEl('title'))
           const chip = svgEl('g', { class: 'chip' })
           chip.append(svgEl('rect', { height: CHIP_HEIGHT, y: -CHIP_HEIGHT / 2, rx: CHIP_HEIGHT / 2 }), svgEl('text', { 'text-anchor': 'middle', dy: '0.35em' }))
-          g.append(svgEl('circle', { class: 'dot' }), chip, svgEl('title'), badge)
+          const tag = svgEl('g', { class: 'open-tag' })
+          tag.append(svgEl('rect', { height: 12, y: -6, rx: 6 }), svgEl('text', { 'text-anchor': 'middle', dy: '0.35em' }), svgEl('title'))
+          g.append(svgEl('circle', { class: 'dot' }), chip, svgEl('title'), badge, tag)
           this.nodeEls.set(id, g)
           this.nodeLayer.append(g)
         }
@@ -526,6 +539,19 @@ export class Scene {
         // The K/S/F badge sits up and to the right, outside a wide chip too.
         const bx = ln.chip ? chipWidth(ln.chip) / 2 + 6 : BADGE_OFFSET
         g.querySelector('.badge')!.setAttribute('transform', `translate(${bx},${-BADGE_OFFSET})`)
+        // An expanded variable gets a hollow tag with its name, up and to the left: click to collapse.
+        const open = t.openVars?.get(ln.path.join('.'))
+        g.classList.toggle('open-var', !!open)
+        if (open) {
+          const tw = 8 + open.name.length * 5.6
+          const tag = g.querySelector('.open-tag')!
+          tag.setAttribute('transform', `translate(${-(BADGE_OFFSET + tw / 2 - 6)},${-BADGE_OFFSET})`)
+          const rect = tag.querySelector('rect')!
+          rect.setAttribute('width', String(tw))
+          rect.setAttribute('x', String(-tw / 2))
+          tag.querySelector('text')!.textContent = open.name
+          tag.querySelector('title')!.textContent = `${open.name} is expanded: click to collapse it`
+        }
         const where = ln.path.length ? `at [${ln.path.join(', ')}]` : '(root)'
         g.querySelector('title')!.textContent = ln.chip
           ? `variable ${ln.chip} ${where}: right-click to expand`
@@ -576,6 +602,7 @@ export class Scene {
       this.linkEls.delete(id)
     }
     this.links = nextLinks
+    this.applyParts()
 
     // The camera stays where it is, except: fit everything the first time
     // there's something to show, and glide to reveal trees when asked (never
@@ -681,6 +708,31 @@ export class Scene {
     return { x: p.x, y: p.y }
   }
 
+  /** Colour nodes as the parts w, x, y, z of a rule (empty map: no colours).
+   *  Only changes classes: the physics isn't disturbed. */
+  setParts(parts: Parts): void {
+    this.parts = parts
+    this.applyParts()
+  }
+
+  private applyParts(): void {
+    const set = (el: Element, part: string | undefined) => {
+      for (const c of [...el.classList]) if (c.startsWith('part-')) el.classList.remove(c)
+      if (part) el.classList.add(`part-${part}`)
+    }
+    for (const [id, el] of this.nodeEls) set(el, this.parts.get(id))
+    // A link inside one part takes that part's colour.
+    for (const [id, link] of this.links) {
+      const part = this.parts.get(id)
+      set(this.linkEls.get(id)!, part && this.parts.get(link.source.id) === part ? part : undefined)
+    }
+  }
+
+  /** Highlight the node a dragged Add-menu button would be attached to. */
+  showDropTarget(id: string | null): void {
+    this.setDropTarget(id ? (this.nodes.get(id) ?? null) : null)
+  }
+
   /** What's under a screen point: a node (if any) and the world position. */
   hitAt(clientX: number, clientY: number): PointHit {
     const m = this.svg.getScreenCTM()
@@ -768,6 +820,8 @@ export class Scene {
       e.preventDefault()
       this.stopGlide()
       this.panPointers.set(e.pointerId, local(e))
+      // A press that doesn't move is a click on empty canvas.
+      this.canvasPress = this.panPointers.size === 1 && e.button === 0 ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null
       this.svg.setPointerCapture(e.pointerId)
       this.svg.classList.add('panning')
     })
@@ -776,6 +830,8 @@ export class Scene {
       const last = this.panPointers.get(e.pointerId)
       if (!last) return
       const now = local(e)
+      const cp = this.canvasPress
+      if (cp && (cp.id !== e.pointerId || Math.hypot(e.clientX - cp.x, e.clientY - cp.y) >= CLICK_SLOP)) this.canvasPress = null
       if (this.panPointers.size === 1) {
         this.setCamera(panBy(this.camera, now.x - last.x, now.y - last.y))
       } else {
@@ -795,6 +851,15 @@ export class Scene {
     const release = (e: PointerEvent) => {
       if (!this.panPointers.delete(e.pointerId)) return
       if (this.panPointers.size === 0) this.svg.classList.remove('panning')
+      const cp = this.canvasPress
+      this.canvasPress = null
+      if (cp?.id === e.pointerId && e.type === 'pointerup') {
+        const m = this.svg.getScreenCTM()
+        if (m) {
+          const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse())
+          this.events.onCanvasClick?.({ x: p.x, y: p.y })
+        }
+      }
     }
     this.svg.addEventListener('pointerup', release)
     this.svg.addEventListener('pointercancel', release)
@@ -818,8 +883,25 @@ export class Scene {
     // Badges: a plain click reduces that redex. They sit on top of their node,
     // so stop the press from also starting a node click or drag.
     this.svg.addEventListener('pointerdown', (e) => {
-      if ((e.target as Element).closest('.badge')) e.stopImmediatePropagation()
+      if ((e.target as Element).closest('.badge, .open-tag')) e.stopImmediatePropagation()
     }, { capture: true })
+    let hovered: Element | null = null
+    this.svg.addEventListener('pointerover', (e) => {
+      const badge = (e.target as Element).closest('.badge')
+      if (badge === hovered) return
+      hovered = badge
+      const g = badge?.closest<SVGGElement>('g.node')
+      const node = g?.dataset.id ? this.nodes.get(g.dataset.id) : undefined
+      this.events.onRedexHover?.(node && g!.classList.contains('redex') ? { treeKey: node.treeKey, path: node.path } : null)
+    })
+    this.svg.addEventListener('click', (e) => {
+      const tag = (e.target as Element).closest('.open-tag')
+      const tg = tag?.closest<SVGGElement>('g.node')
+      const tn = tg?.dataset.id ? this.nodes.get(tg.dataset.id) : undefined
+      if (tn && tg!.classList.contains('open-var') && !tg!.classList.contains('leaving')) {
+        this.events.onCollapseClick?.({ treeKey: tn.treeKey, path: tn.path })
+      }
+    })
     this.svg.addEventListener('click', (e) => {
       const badge = (e.target as Element).closest('.badge')
       const g = badge?.closest<SVGGElement>('g.node')

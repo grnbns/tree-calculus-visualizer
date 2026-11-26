@@ -1,32 +1,37 @@
 import './style.css'
-import { allRedexes, show, step, type Path } from './engine'
+import { allRedexes, show, step, type Path, type Rule, type Tree } from './engine'
 import { parseNamed, D } from './parser'
 import { Scene, DEFAULT_PARAMS, type PhysicsParams, type PointHit } from './scene'
-import { idSource } from './ids'
+import { idSource, idsAt } from './ids'
 import {
   addFragment, addLeafAt, addTree, collapseChip, emptyWorkspace, expandChip, getTree, joinTrees,
-  moveTree, nameAt, pasteOnto, removeAt, replaceTree, selectTree, tearOff,
+  moveTree, nameAt, pasteOnto, removeAt, replaceTree, selectTree, setAllBelow, tearOff,
   type Change, type PlacedTree, type Workspace,
 } from './workspace'
-import { collapsedChips, enclosingMarks, fragmentAt, type Fragment } from './marks'
+import {
+  chipsToUnfold, collapsedChips, enclosingMarks, fragmentAt, marksBelow, openVariables, revealDiff, setExpanded,
+  type Fragment, type Marks,
+} from './marks'
+import { carryParts, partsOf, PART_PATHS, RULE_TEXT, type Parts } from './parts'
 import { defineVar, deleteVar, loadVars, lookupIn, nameProblem, saveVars, showNamed, type Vars } from './vars'
 import {
-  atEnd, back, currentWs, describeFrame, forward, reduce, seek, startRun,
+  atEnd, back, beforeRule, currentWs, describeFrame, forward, nextRuleFrame, reduce, seek, startRun, stepsBefore,
   type Moved, type Run, type Stopped,
 } from './run'
 
 // Built-in variables come first in the Add menu, then these, then yours.
 const EXAMPLES: [label: string, text: string][] = [
-  ['K x y', 'K(△△)(△△△)'],
-  ['I x', 'I(△△)'],
-  ['S K K x', 'S K K(△△)'],
+  ['K(△△)(△△△)', 'K(△△)(△△△)'],
+  ['I(△△)', 'I(△△)'],
+  ['S K K(△△)', 'S K K(△△)'],
 ]
+const COLOURS_KEY = 'tree-calculus-colours'
 const VARS_KEY = 'tree-calculus-vars'
 
 type Mode = 'add' | 'remove' | 'move'
 
 const MODE_HELP: Record<Mode, string> = {
-  add: 'Add branch (A): click a node to give it a new leaf branch, which applies it to △. Shift-click removes instead.',
+  add: 'Add branch (A): click a node to give it a new leaf branch, which applies it to △; click empty canvas for a new leaf. Shift-click removes instead.',
   remove: 'Remove (R): click a node to remove it and everything under it; click a root to remove the whole tree. Shift-click adds instead.',
   move: 'Move (M): drag any node to tear it off into a tree of its own. Click a tree to select it.',
 }
@@ -42,8 +47,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <input id="tree-input" spellcheck="false" autocomplete="off" aria-label="Tree in △ notation"
              placeholder="△(△△)(△△△) or S K K △" />
       <button id="new-btn" type="button" title="Add the typed tree as a new tree">New</button>
+      <button id="var-btn" type="button" title="Make the selected tree a variable">Var</button>
     </div>
-    <div class="examples" id="examples"><span class="label">Add</span></div>
+    <div class="examples" id="examples"></div>
     <p class="error" id="error" role="alert"></p>
     <p class="status" id="status" role="status"></p>
   </section>
@@ -68,10 +74,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 
   <section class="panel help" id="help" hidden aria-label="Help">
-    <p><b>Add</b> (A): click a node to give it a leaf branch, which applies it to △. <b>Remove</b> (R): click to remove a branch, or a root to remove its tree. Shift-click swaps the two. <b>Move</b> (M): drag any node to tear it off.</p>
+    <p><b>Add</b> (A): click a node to give it a leaf branch, which applies it to △; click empty canvas to start a new tree. <b>Remove</b> (R): click to remove a branch, or a root to remove its tree. Shift-click swaps the two. <b>Move</b> (M): drag any node to tear it off.</p>
     <p>In every mode, drag a tree by its <b>root</b> onto a node of another tree to join them (that node is applied to it). The first click on a dimmed tree selects it.</p>
-    <p><b>Reduce:</b> ▶| steps (→), |◀ steps back (←), Space plays and pauses. Click a K/S/F letter to reduce that redex instead.</p>
-    <p><b>Variables:</b> right-click a node → <i>Name this…</i> to save it as a variable (V, X2, True…). It shows as a chip; type its name or use the Add menu to make more. Right-click a chip to expand it. Reductions open a chip only when a rule needs its insides.</p>
+    <p><b>Reduce:</b> ▶| steps (→), |◀ steps back (←), Space plays and pauses. Click a K/S/F letter to reduce that redex instead. The card above the playback buttons shows the rule; with <b>Colours</b> on, its parts w, x, y, z are coloured in the tree, and ▶| goes in half-steps: the first click applies the rule (the colours follow the parts), the second moves the colours to the next step. Hover a letter to preview that redex.</p>
+    <p><b>Variables:</b> right-click a node → <i>Name this…</i> (or the <b>Var</b> button) to save it as a variable (V, X2, True…). It shows as a chip; type its name or use the Add menu to make more. Right-click a chip to expand it; <i>Expand all</i> / <i>Collapse all</i> do a whole subtree. An open variable shows its name in a hollow tag: click the tag to collapse it. Reductions open a chip only when a rule needs its insides.</p>
+    <p><b>Add menu:</b> click a button to add a new tree, or drag it onto a node to attach it there.</p>
     <p><b>Copy and paste:</b> ⌘/Ctrl+C copies the subtree under the pointer (or the selected tree) as △ text; ⌘/Ctrl+V pastes onto the node under the pointer, or as a new tree. Also in the right-click menu.</p>
     <p><b>View:</b> drag empty space or scroll to pan; ctrl/⌘ + scroll or pinch to zoom; F fits everything.</p>
   </section>
@@ -84,16 +91,24 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </section>
 
   <section class="panel bottom-center playback" aria-label="Reduction playback">
+    <div class="status-row">
+      <span id="frame-label"></span>
+      <label class="colours-toggle" title="Colour the parts w, x, y, z of each rule in the tree">
+        <input id="colours" type="checkbox" /> Colours
+      </label>
+    </div>
+    <div id="rule-card" aria-live="polite"></div>
+    <div class="controls">
     <button id="back-btn" type="button" title="Step back (←)" aria-label="Step back">|◀</button>
     <button id="play-btn" type="button" title="Play (Space)">▶ Play</button>
     <button id="fwd-btn" type="button" title="Step forward (→)" aria-label="Step forward">▶|</button>
     <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Reduction steps" />
-    <span id="frame-label"></span>
     <label class="play-speed" title="Steps per second while playing">
       <span>Speed</span>
       <input id="play-speed" type="range" min="0.25" max="4" step="0.25" value="1" />
       <output id="play-speed-out">1</output>
     </label>
+    </div>
   </section>
 
   <section class="bottom-right">
@@ -120,6 +135,9 @@ const notation = $<HTMLElement>('#notation')
 const notationRaw = $<HTMLElement>('#notation-raw')
 const statusBox = $<HTMLParagraphElement>('#status')
 const menu = $<HTMLDivElement>('#context-menu')
+const ruleCard = $<HTMLDivElement>('#rule-card')
+const coloursBox = $<HTMLInputElement>('#colours')
+const varBtn = $<HTMLButtonElement>('#var-btn')
 const backBtn = $<HTMLButtonElement>('#back-btn')
 const playBtn = $<HTMLButtonElement>('#play-btn')
 const fwdBtn = $<HTMLButtonElement>('#fwd-btn')
@@ -160,7 +178,7 @@ let statusTimer: number | null = null
 function say(text: string): void {
   statusBox.textContent = text
   if (statusTimer !== null) clearTimeout(statusTimer)
-  statusTimer = window.setTimeout(() => (statusBox.textContent = ''), 5000)
+  statusTimer = window.setTimeout(() => (statusBox.textContent = ''), 10000)
 }
 
 // --- State and history ---------------------------------------------------------
@@ -182,16 +200,149 @@ let run: Run | null = null
 let playing = false
 let playTimer: number | null = null
 
+// --- Rule card and colours (milestone 10) ------------------------------------------
+//
+// One set of colours at a time: the parts w, x, y, z of the next step (or of
+// the redex whose letter you hover), or of the step that just fired.
+//
+// With Colours on, ▶| goes in half-steps: the first click applies the rule and
+// the colours stay on the parts that moved ("Just now"); the second click
+// moves the colours (and the card) on to the next step. While the next step is
+// previewed, the chips it has to look inside are opened just for show, so its
+// coloured parts are visible; they fold back if you leave without firing it.
+// With Colours off, ▶| is a whole step and the card moves on once the motion
+// settles.
+
+type Shown = { rule: Rule; parts: Parts; bindings: [part: string, text: string][]; done: boolean }
+let justDid: Shown | null = null        // the rule just applied (first half-step)
+let hoverRedex: { treeKey: string; path: Path } | null = null
+let colouring = (() => { try { return localStorage.getItem(COLOURS_KEY) !== 'off' } catch { return true } })()
+let settleTimer: number | null = null
+let lastDisplayMarks: Marks = new Map() // marks as last drawn (with the preview's opened chips)
+let lastOpen = ''                       // chips opened for the preview, as last drawn
+// Chips you just collapsed yourself: the preview doesn't reopen them until
+// the next step fires (or the next edit).
+let keepClosed = new Set<string>()
+// The preview only opens chips once you've started stepping this tree (▶|,
+// Play, a K/S/F letter or the scrubber). Selecting another tree, clicking
+// empty canvas, editing, undo or redo stops it until you step again.
+let previewArmed = false
+
+/** The parts of the step `rule` at `path` in `t`; `born` (after the step)
+ *  colours the S rule's copy of z too. */
+function describeParts(t: PlacedTree, marks: Marks, rule: Rule, path: Path, born?: ReadonlyMap<string, string>): Shown {
+  const { parts } = partsOf(t.ids, { rule, path })
+  const bindings = PART_PATHS[rule].map(([part, rel]): [string, string] => {
+    const f = fragmentAt(t.tree, t.ids, marks, [...path, ...rel])
+    return [part, showNamed(f.tree, f.marks.filter((m) => !m.mark.expanded))]
+  })
+  return { rule, parts: born ? carryParts(parts, born) : parts, bindings, done: born !== undefined }
+}
+
+/** "Just now" for the rule frame at `pos` of `r`. */
+function justDidAt(r: Run, pos: number): Shown | null {
+  const f = r.frames[pos]
+  const prev = r.frames[pos - 1]?.ws
+  const t = prev && getTree(prev, r.treeKey)
+  return t && f.rule && f.path ? describeParts(t, prev.marks, f.rule, f.path, f.born ?? new Map()) : null
+}
+
+/** The step the selected tree would take next (or the hovered badge's). */
+function nextStepOf(t: PlacedTree): { rule: Rule; path: Path } | null {
+  if (hoverRedex?.treeKey === t.key) {
+    const r = allRedexes(t.tree).find((x) => x.path.join() === hoverRedex!.path.join())
+    if (r) return r
+  }
+  const i = run?.treeKey === t.key ? nextRuleFrame(run) : null
+  const recorded = i !== null ? run!.frames[i] : undefined
+  if (recorded?.rule && recorded.path) return { rule: recorded.rule, path: recorded.path }
+  return step(t.tree)
+}
+
+/** What the card and the colours show now, and which chips the preview opens. */
+function currentShown(): { shown: Shown | null; open: string[] } {
+  if (justDid) return { shown: justDid, open: [] }
+  const sel = getTree(ws, ws.selected)
+  const next = sel && nextStepOf(sel)
+  if (!sel || !next) return { shown: null, open: [] }
+  return {
+    shown: describeParts(sel, ws.marks, next.rule, next.path),
+    open: colouring && previewArmed ? chipsToUnfold(sel.ids, ws.marks, next.path).filter((id) => !keepClosed.has(id)) : [],
+  }
+}
+
+/** Update the colours and the card; redraw only if the preview opens or
+ *  closes chips (that changes the layout). */
+function updateColours(): void {
+  const { shown, open } = currentShown()
+  if (open.join() !== lastOpen) {
+    render()
+    return
+  }
+  scene.setParts(colouring && shown ? shown.parts : new Map())
+  renderCard(shown)
+  waitToSettle()
+}
+
+/** Colours off: "Just now" lasts until the motion settles. */
+function waitToSettle(): void {
+  if (justDid && !colouring && settleTimer === null) {
+    const check = () => {
+      settleTimer = null
+      if (!justDid || colouring) return
+      if (scene.isSettled(0.3)) {
+        justDid = null
+        updateColours()
+      } else settleTimer = window.setTimeout(check, 80)
+    }
+    settleTimer = window.setTimeout(check, 150)
+  }
+}
+
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+const lettered = (s: string) => esc(s).replace(/[wxyz]/g, (c) => `<span class="part-${c}">${c}</span>`)
+const short = (s: string) => (s.length > 22 ? s.slice(0, 21) + '…' : s)
+
+function renderCard(shown: Shown | null): void {
+  ruleCard.hidden = !shown
+  if (!shown) return
+  const { before, after } = RULE_TEXT[shown.rule]
+  // Segments: rule · equation · one per part, with a divider between. Which
+  // side of the equation is lit says where we are: the left side before the
+  // rule fires (next step), the right side once it has (just applied).
+  ruleCard.classList.toggle('done', shown.done)
+  ruleCard.setAttribute('aria-label', shown.done ? 'Rule just applied' : 'Next rule')
+  const segs = [
+    `<b>${shown.rule} rule</b>`,
+    `<code class="eq"><span class="lhs">${lettered(before)}</span> → <span class="rhs">${lettered(after)}</span></code>`,
+    ...shown.bindings.map(([p, t]) => `<span class="part-${p}">${p}</span> = <code title="${esc(t)}">${esc(short(t))}</code>`),
+  ]
+  ruleCard.innerHTML = segs.map((x) => `<span class="seg">${x}</span>`).join('')
+}
+
+/** Variables a normal form of tree `key` might be: yours, the ones used in
+ *  the tree first. (K, I, D and S never: every △△ would become K.) */
+function resultCandidates(key: string): { name: string; def: Tree }[] {
+  const t = getTree(ws, key)
+  const used = new Set(t ? fragmentAt(t.tree, t.ids, ws.marks).marks.map((m) => m.mark.name) : [])
+  const mine = [...vars.values()].filter((v) => !v.builtin)
+  return [...mine.filter((v) => used.has(v.name)), ...mine.filter((v) => !used.has(v.name))].map((v) => ({ name: v.name, def: v.tree }))
+}
+
 /** Apply a change. `typing`: consecutive keystrokes in one tree are one undo
  *  step. `sameAction`: part of the previous action (a drop that ends a tear),
  *  so it doesn't get an undo step of its own. */
-function commit(change: Change, opts: { typing?: boolean; sameAction?: boolean } = {}): void {
+function commit(change: Change, opts: { typing?: boolean; sameAction?: boolean; keepClosed?: readonly string[] } = {}): void {
   endRun()
   const coalesce = opts.sameAction || (opts.typing && lastTypedKey !== null && lastTypedKey === change.ws.selected)
   if (!coalesce) undoStack.push(ws)
   redoStack.length = 0
   lastTypedKey = opts.typing ? change.ws.selected : null
   ws = change.ws
+  justDid = null
+  previewArmed = false
+  keepClosed = new Set(opts.keepClosed ?? [])
+  if (change.message) say(change.message)
   render(change.born, change.absorbed)
 }
 
@@ -206,16 +357,28 @@ function render(born?: ReadonlyMap<string, string>, absorbed?: ReadonlyMap<strin
   const reveal = keys.filter((k) => !shownKeys.has(k))
   if (playing && ws.selected) reveal.push(ws.selected)
   shownKeys = new Set(keys)
+  // Chips the preview opens just for show (see the rule card section).
+  const { shown, open } = currentShown()
+  const display = open.length ? setExpanded(ws.marks, open, true) : ws.marks
+  const sel = getTree(ws, ws.selected)
+  if (sel) {
+    // Opening or closing chips (for real or for the preview): nodes sprout out of / slide into them.
+    const d = revealDiff(sel.ids, lastDisplayMarks, display)
+    born = new Map([...d.born, ...(born ?? [])])
+    absorbed = new Map([...d.absorbed, ...(absorbed ?? [])])
+  }
+  lastDisplayMarks = display
+  lastOpen = open.join()
   scene.setWorkspace(
     ws.trees.map((t) => ({
       ...t,
       nextRedex: step(t.tree)?.path ?? null,
       redexes: allRedexes(t.tree),
-      chips: collapsedChips(t.ids, ws.marks),
+      chips: collapsedChips(t.ids, display),
+      openVars: new Map([...openVariables(t.ids, display)].filter(([, c]) => ws.marks.get(c.id)?.expanded)),
     })),
     { selected: ws.selected, born, reveal, absorbed },
   )
-  const sel = getTree(ws, ws.selected)
   if (!sel) {
     notation.textContent = ''
     notationRaw.textContent = ''
@@ -234,6 +397,10 @@ function render(born?: ReadonlyMap<string, string>, absorbed?: ReadonlyMap<strin
   undoBtn.disabled = undoStack.length === 0
   redoBtn.disabled = redoStack.length === 0
   clearBtn.disabled = ws.trees.length === 0
+  varBtn.disabled = !sel
+  scene.setParts(colouring && shown ? shown.parts : new Map())
+  renderCard(shown)
+  waitToSettle()
 }
 
 function undo(): void {
@@ -243,6 +410,9 @@ function undo(): void {
   redoStack.push(ws)
   ws = prev
   lastTypedKey = null
+  justDid = null
+  previewArmed = false
+  say('')
   render()
 }
 
@@ -253,6 +423,9 @@ function redo(): void {
   undoStack.push(ws)
   ws = next
   lastTypedKey = null
+  justDid = null
+  previewArmed = false
+  say('')
   render()
 }
 
@@ -281,7 +454,8 @@ function ensureRun(): Run | null {
   undoStack.push(ws)          // the whole run is one undo step
   redoStack.length = 0
   lastTypedKey = null
-  run = startRun(ws, key)
+  run = startRun(ws, key, resultCandidates(key))
+  say('')
   return run
 }
 
@@ -289,29 +463,86 @@ function ensureRun(): Run | null {
 function applyMove(r: Moved | Stopped | null): boolean {
   if (r === null) return false
   if ('stopped' in r) {
+    say(r.message)
     renderPlayback()
     return false
   }
+  // Forward onto a rule: keep its parts coloured while they travel.
+  const forwardOnto = run !== null && r.run.pos > run.pos && r.run.frames[r.run.pos].rule
+  justDid = forwardOnto ? justDidAt(r.run, r.run.pos) : null
+  keepClosed = new Set()
   run = r.run
   ws = currentWs(run)
   render(r.born, r.absorbed)
+  announceEnd()
   return true
+}
+
+function announceEnd(): void {
+  if (!run || !atEnd(run) || canGoForward()) return
+  const n = stepsBefore(run)
+  say(n ? `Reached a normal form after ${n} step${n === 1 ? '' : 's'}.` : 'Nothing to reduce: this tree is a value.')
+}
+
+/** With colours on, unfold frames are shown by the preview: move past them. */
+function skipUnfold(m: Moved | Stopped): Moved | Stopped {
+  if (!colouring || 'stopped' in m) return m
+  if (!m.run.frames[m.run.pos].unfold || atEnd(m.run)) return m
+  const n = forward(m.run, newId)
+  if ('stopped' in n) return m
+  return { run: n.run, born: new Map([...(m.born ?? []), ...(n.born ?? [])]), absorbed: n.absorbed }
 }
 
 function canGoForward(): boolean {
   const sel = getTree(ws, ws.selected)
   if (!sel) return false
+  if (colouring && justDid) return true          // the second half-step is still to come
   if (run?.treeKey === sel.key && !atEnd(run)) return true
   return step(sel.tree) !== null
 }
 
 function stepForward(): boolean {
+  if (colouring && !previewArmed) {
+    // The first press starts the preview; if that opens chips to show the
+    // coloured parts, that's all this press does (the next one applies the rule).
+    previewArmed = true
+    if (currentShown().open.length) {
+      render()
+      return true
+    }
+  }
+  if (colouring && justDid) {
+    // Second half-step: the colours move on to the next step.
+    justDid = null
+    if (run && !atEnd(run) && run.frames[run.pos + 1].recognised) return applyMove(forward(run, newId))
+    render()
+    announceEnd()
+    return true
+  }
   const r = ensureRun()
-  return r !== null && applyMove(forward(r, newId))
+  return r !== null && applyMove(skipUnfold(forward(r, newId)))
 }
 
 function stepBack(): void {
-  if (run) applyMove(back(run))
+  if (!run) return
+  if (!colouring) {
+    applyMove(back(run))
+    return
+  }
+  if (justDid) {
+    // Undo the rule just applied: back to its preview.
+    justDid = null
+    applyMove(seek(run, beforeRule(run)))
+    return
+  }
+  // From a preview: back to the "Just now" of the rule before it.
+  const f = run.frames[run.pos]
+  if (f.recognised || f.unfold) {
+    applyMove(back(run))
+    if (!run.frames[run.pos].rule) return
+  } else if (!f.rule) return
+  justDid = justDidAt(run, run.pos)
+  render()
 }
 
 function play(): void {
@@ -352,7 +583,7 @@ function renderPlayback(): void {
   playBtn.disabled = !playing && !forwardOk
   fwdBtn.disabled = playing || !forwardOk
   const r = run?.treeKey === ws.selected ? run : null
-  backBtn.disabled = playing || !r || r.pos === 0
+  backBtn.disabled = playing || !r || (r.pos === 0 && !justDid)
   scrub.hidden = !r || r.frames.length < 2
   if (r) {
     scrub.max = String(r.frames.length - 1)
@@ -367,8 +598,16 @@ backBtn.addEventListener('click', stepBack)
 scrub.addEventListener('input', () => {
   const to = Number(scrub.value)   // read it before pause() redraws the slider
   pause()
+  previewArmed = true
   if (run) applyMove(seek(run, to))
 })
+coloursBox.checked = colouring
+coloursBox.addEventListener('change', () => {
+  colouring = coloursBox.checked
+  try { localStorage.setItem(COLOURS_KEY, colouring ? 'on' : 'off') } catch { /* not saved */ }
+  updateColours()
+})
+
 playSpeed.addEventListener('input', () => {
   $<HTMLOutputElement>('#play-speed-out').textContent = playSpeed.value
 })
@@ -424,6 +663,8 @@ function select(treeKey: string): void {
   if (ws.selected === treeKey) return
   endRun()
   ws = selectTree(ws, treeKey)
+  justDid = null
+  previewArmed = false
   render()
 }
 
@@ -437,6 +678,35 @@ scene.events.onClick = ({ treeKey, path, shiftKey }) => {
   commit(adding ? addLeafAt(ws, treeKey, path, newId) : removeAt(ws, treeKey, path as Path))
 }
 
+// Clicking an expanded variable's name tag collapses it.
+scene.events.onCollapseClick = ({ treeKey, path }) => {
+  const t = getTree(ws, treeKey)
+  if (t) collapseKeep(collapseChip(ws, treeKey, idsAt(t.ids, path).id), [idsAt(t.ids, path).id])
+}
+
+/** Collapse, and keep those chips closed in the preview until the next step. */
+function collapseKeep(change: Change, ids: readonly string[]): void {
+  commit(change, { keepClosed: ids })
+}
+
+// In Add mode, clicking empty canvas makes a new one-node tree there.
+// (Not when the click only closed the right-click menu.)
+let menuClosedByPress = false
+scene.events.onCanvasClick = ({ x, y }) => {
+  if (menuClosedByPress) { menuClosedByPress = false; return }
+  if (previewArmed) {
+    previewArmed = false       // clicking off the tree folds the preview's chips away
+    render()
+  }
+  if (mode === 'add') commit({ ...addTree(ws, [], newId, { x, y }), message: 'Added a leaf △ as a new tree. Click it to give it branches.' })
+}
+
+// Hovering a badge previews that redex in the rule card and the colours.
+scene.events.onRedexHover = (r) => {
+  hoverRedex = r
+  if (!justDid) updateColours()
+}
+
 // Clicking a redex's badge reduces that redex (as a step of the run).
 scene.events.onRedexClick = ({ treeKey, path }) => {
   if (ws.selected !== treeKey) {
@@ -444,8 +714,9 @@ scene.events.onRedexClick = ({ treeKey, path }) => {
     return
   }
   pause()
+  previewArmed = true
   const r = ensureRun()
-  if (r) applyMove(reduce(r, newId, path))
+  if (r) applyMove(skipUnfold(reduce(r, newId, path)))
 }
 
 // A tear and the drop that ends it are one action (one undo step).
@@ -503,25 +774,126 @@ $<HTMLButtonElement>('#new-btn').addEventListener('click', () => {
   }
 })
 
+varBtn.addEventListener('click', () => {
+  if (!ws.selected) return
+  const r = varBtn.getBoundingClientRect()
+  openNameForm(ws.selected, [], r.left, r.bottom + 6)
+})
+
+/** Add-menu buttons can be dragged onto the canvas: dropped on a node, that
+ *  node is applied to the tree (like a paste); on empty canvas, it's a new
+ *  tree there. A plain click still adds it as a new tree. */
+function makeDraggable(b: HTMLButtonElement, text: string): void {
+  let dragged = false
+  b.addEventListener('click', (e) => {
+    if (dragged) { dragged = false; e.preventDefault(); return }
+    commit(addFragment(ws, parseNamed(text, lookup), newId))
+  })
+  b.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || (e.target as Element).closest('.delete')) return
+    const x0 = e.clientX, y0 = e.clientY
+    let ghost: HTMLElement | null = null
+    const target = (ev: PointerEvent) =>
+      document.elementFromPoint(ev.clientX, ev.clientY)?.closest('#canvas') ? scene.hitAt(ev.clientX, ev.clientY) : null
+    const move = (ev: PointerEvent) => {
+      if (!ghost) {
+        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return
+        ghost = document.createElement('div')
+        ghost.className = 'drag-ghost'
+        ghost.textContent = b.firstChild?.textContent ?? text
+        document.body.append(ghost)
+      }
+      ghost.style.left = `${ev.clientX}px`
+      ghost.style.top = `${ev.clientY}px`
+      scene.showDropTarget(target(ev)?.node?.id ?? null)
+    }
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      if (!ghost) return
+      ghost.remove()
+      scene.showDropTarget(null)
+      dragged = true                      // swallow the click that follows
+      setTimeout(() => (dragged = false), 0)
+      const hit = ev.type === 'pointerup' ? target(ev) : null
+      if (hit) pasteFragment(parseNamed(text, lookup), hit)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+  })
+}
+
 /** The Add menu: △, the built-in variables, examples, then your variables. */
+// Sections of the Add menu: Basics is always shown; Examples and Yours fold
+// open and closed (remembered). Yours scrolls when long, and gets a filter box
+// once there are more than FILTER_FROM variables.
+const ADD_OPEN_KEY = 'tree-calculus-add-open'
+const FILTER_FROM = 8
+let addOpen: Record<string, boolean> = (() => {
+  try { return { examples: false, yours: true, ...JSON.parse(localStorage.getItem(ADD_OPEN_KEY) ?? '{}') } } catch { return { examples: false, yours: true } }
+})()
+let varFilter = ''
+
 function renderAddMenu(): void {
-  examples.replaceChildren(examples.querySelector('.label')!)
-  const button = (label: string, text: string, title = `Add ${text} as a new tree`) => {
+  const button = (into: HTMLElement, label: string, text: string, title = `Add ${text} as a new tree (or drag it onto a node)`) => {
     const b = document.createElement('button')
     b.type = 'button'
     b.textContent = label
     b.title = title
-    b.addEventListener('click', () => commit(addFragment(ws, parseNamed(text, lookup), newId)))
-    examples.append(b)
+    makeDraggable(b, text)
+    into.append(b)
     return b
   }
-  button('△', '△')
-  for (const v of vars.values()) if (v.builtin) button(v.name, v.name, `Add ${v.name} = ${v.text}`).classList.add('var')
-  for (const [label, text] of EXAMPLES) button(label, text)
-  for (const v of vars.values()) {
-    if (v.builtin) continue
-    const b = button(v.name, v.name, `Add ${v.name} = ${v.text}`)
+  const section = (key: string, title: string) => {
+    const d = document.createElement('details')
+    d.className = 'add-group'
+    d.open = addOpen[key] ?? false
+    d.innerHTML = `<summary>${title}</summary><div class="add-items"></div>`
+    d.addEventListener('toggle', () => {
+      addOpen = { ...addOpen, [key]: d.open }
+      try { localStorage.setItem(ADD_OPEN_KEY, JSON.stringify(addOpen)) } catch { /* not saved */ }
+    })
+    examples.append(d)
+    return d.querySelector<HTMLDivElement>('.add-items')!
+  }
+
+  examples.replaceChildren()
+  const basics = document.createElement('div')
+  basics.className = 'add-row'
+  basics.innerHTML = '<span class="label">Add</span>'
+  examples.append(basics)
+  button(basics, '△', '△')
+  for (const v of vars.values()) if (v.builtin) button(basics, v.name, v.name, `Add ${v.name} = ${v.text} (or drag it onto a node)`).classList.add('var')
+
+  const ex = section('examples', 'Examples')
+  for (const [label, text] of EXAMPLES) button(ex, label, text)
+
+  const mine = [...vars.values()].filter((v) => !v.builtin)
+  if (mine.length === 0) return
+  const yours = section('yours', `Yours (${mine.length})`)
+  yours.classList.add('var-list')
+  if (mine.length > FILTER_FROM) {
+    const f = document.createElement('input')
+    f.className = 'var-filter'
+    f.placeholder = 'Filter…'
+    f.spellcheck = false
+    f.setAttribute('aria-label', 'Filter your variables')
+    f.value = varFilter
+    yours.before(f)
+    f.addEventListener('input', () => {
+      varFilter = f.value
+      const q = varFilter.trim().toLowerCase()
+      for (const b of yours.querySelectorAll<HTMLButtonElement>('button')) b.hidden = !!q && !b.dataset.name!.toLowerCase().includes(q)
+    })
+  }
+  const q = varFilter.trim().toLowerCase()
+  for (const v of mine) {
+    const b = button(yours, v.name, v.name, `Add ${v.name} = ${v.text} (or drag it onto a node)`)
     b.classList.add('var', 'user-var')
+    b.dataset.name = v.name
+    b.hidden = !!q && !v.name.toLowerCase().includes(q)
     const del = document.createElement('span')
     del.className = 'delete'
     del.textContent = '×'
@@ -637,7 +1009,14 @@ function openMenu(hit: PointHit, clientX: number, clientY: number): void {
       item(`Expand ${mark.name}`, () => commit(expandChip(ws, node.treeKey, node.id)))
     }
     const around = enclosingMarks(t.ids, ws.marks, node.path).find((id) => ws.marks.get(id)!.expanded)
-    if (around) item(`Collapse ${ws.marks.get(around)!.name}`, () => commit(collapseChip(ws, node.treeKey, around)))
+    if (around) item(`Collapse ${ws.marks.get(around)!.name}`, () => collapseKeep(collapseChip(ws, node.treeKey, around), [around]))
+    const below = marksBelow(t.ids, ws.marks, node.path).map((id) => ws.marks.get(id)!)
+    if (below.some((m) => !m.expanded)) {
+      item('Expand all', () => commit(setAllBelow(ws, node.treeKey, node.path, true)), 'Open every variable in this subtree')
+    }
+    if (below.some((m) => m.expanded)) {
+      item('Collapse all', () => collapseKeep(setAllBelow(ws, node.treeKey, node.path, false), marksBelow(t.ids, ws.marks, node.path)), 'Close every variable in this subtree')
+    }
     item('Copy', () => {
       const frag = copyTarget(hit)
       if (frag) navigator.clipboard?.writeText(remember(frag)).catch(() => {})
@@ -689,7 +1068,11 @@ function openNameForm(treeKey: string, path: Path, clientX: number, clientY: num
 
 scene.events.onContextMenu = ({ clientX, clientY, ...hit }) => openMenu(hit, clientX, clientY)
 document.addEventListener('pointerdown', (e) => {
-  if (!menu.hidden && !menu.contains(e.target as Node)) closeMenu()
+  menuClosedByPress = false
+  if (!menu.hidden && !menu.contains(e.target as Node)) {
+    closeMenu()
+    menuClosedByPress = true
+  }
 }, { capture: true })
 
 undoBtn.addEventListener('click', undo)

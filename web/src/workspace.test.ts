@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   addFragment, addLeafAt, addTree, allWorkspaceIds, collapseChip, emptyWorkspace, expandChip, getTree, joinTrees,
-  layoutOf, makeRoom, moveTree, nameAt, pasteOnto, PUSH_GAP, removeAt, removeTree, replaceTree, stepTree, tearOff, unfoldFor, type Workspace,
+  layoutOf, makeRoom, moveTree, setAllBelow, nameAt, pasteOnto, PUSH_GAP, removeAt, removeTree, replaceTree, stepTree, tearOff, unfoldFor, type Workspace,
 } from './workspace'
 import { fragmentAt } from './marks'
 import { idSource, sameShape } from './ids'
@@ -262,5 +262,21 @@ describe('makeRoom', () => {
     ws = addTree(ws, parse('△'), newId).ws                      // placed to the right with a gap
     ws = addTree(ws, parse('△'), newId, { x: 0, y: 500 }).ws     // far below
     expect(makeRoom(ws, 't1')).toBe(ws)
+  })
+})
+
+describe('expand all / collapse all', () => {
+  it('opens every variable in a subtree, and folds them all again', () => {
+    const newId = idSource()
+    let ws = addFragment(emptyWorkspace(), parseNamed('S K'), newId).ws
+    const open = setAllBelow(ws, 't1', [], true)
+    expect([...open.ws.marks.values()].every((m) => m.expanded)).toBe(true)
+    expect(open.born!.size).toBeGreaterThan(10)        // all of S's insides sprout
+    const shut = setAllBelow(open.ws, 't1', [], false)
+    expect([...shut.ws.marks.values()].every((m) => !m.expanded)).toBe(true)
+    expect(shut.absorbed!.size).toBe(open.born!.size)
+    // only below a node: K (an argument of S) alone
+    ws = setAllBelow(ws, 't1', [4], true).ws
+    expect([...ws.marks.values()].filter((m) => m.expanded).map((m) => m.name)).toEqual(['K'])
   })
 })

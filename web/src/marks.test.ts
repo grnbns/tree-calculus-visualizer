@@ -3,6 +3,7 @@ import { step, stepAt, type Path } from './engine'
 import { allIds, freshIds, idSource, idsAt, stepIds } from './ids'
 import { parseNamed } from './parser'
 import {
+  hiddenBy, marksBelow, openVariables, revealDiff,
   carryMarks, chipsToUnfold, collapsedChips, enclosingMarks, fits, fragmentAt, insideIds,
   isHidden, placeMarks, pruneMarks, setExpanded, type Marks, type VarMark,
 } from './marks'
@@ -192,3 +193,37 @@ describe('enclosingMarks, insideIds, fragmentAt', () => {
   })
 })
 
+
+describe('hiddenBy, revealDiff, openVariables, marksBelow', () => {
+  it('a node is hidden by the outermost collapsed chip around it', () => {
+    const { ids, marks } = setup('S')
+    const h = hiddenBy(ids, marks)
+    expect(h.get(idsAt(ids, [2, 1]).id)).toBe(ids.id)          // D inside S's K D: hidden by S
+    expect(h.has(ids.id)).toBe(false)
+    const open = setExpanded(marks, [ids.id], true)
+    expect(hiddenBy(ids, open).get(idsAt(ids, [2, 0]).id)).toBe(idsAt(ids, [2]).id)   // now by K
+  })
+
+  it('revealDiff: what sprouts when opening, what slides in when closing', () => {
+    const { ids, marks } = setup('K △')
+    const open = setExpanded(marks, [ids.id], true)
+    const leaf = idsAt(ids, [0]).id
+    expect([...revealDiff(ids, marks, open).born]).toEqual([[leaf, ids.id]])
+    expect([...revealDiff(ids, open, marks).absorbed]).toEqual([[leaf, ids.id]])
+    expect(revealDiff(ids, marks, marks).born.size).toBe(0)
+  })
+
+  it('openVariables lists visible expanded variables only', () => {
+    const { ids, marks } = setup('S')
+    const all = setExpanded(marks, marksBelow(ids, marks), true)
+    expect([...openVariables(ids, all).values()].map((c) => c.name).sort()).toEqual(['D', 'D', 'D', 'K', 'K', 'K', 'S'])
+    // S closed again: everything inside is hidden, so nothing is listed
+    expect(openVariables(ids, setExpanded(all, [ids.id], false)).size).toBe(0)
+  })
+
+  it('marksBelow includes hidden marks and the node itself', () => {
+    const { ids, marks } = setup('△ S')
+    expect(marksBelow(ids, marks, [0]).length).toBe(7)
+    expect(marksBelow(ids, marks).length).toBe(7)
+  })
+})

@@ -13,6 +13,11 @@
   --computation: #d9480f;
   --computation-light: #f78c4f;
   --accent: #5b4bd6;
+  /* the parts of a rule (milestone 10): not orange (redexes) or purple (chips) */
+  --part-w: #0c8599;
+  --part-x: #1c7ed6;
+  --part-y: #2f9e44;
+  --part-z: #d6336c;
   --error: #c92a2a;
   --shadow: 0 4px 18px rgba(20, 18, 30, 0.08);
 
@@ -34,6 +39,10 @@
     --computation: #ff8a4c;
     --computation-light: #ffc29e;
     --accent: #9d91ff;
+    --part-w: #3bc9db;
+    --part-x: #4dabf7;
+    --part-y: #69db7c;
+    --part-z: #f783ac;
     --error: #ff6b6b;
     --shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
   }
@@ -73,6 +82,29 @@ html, body {
 /* Every redex (a node a rule can fire at) gets a thin orange border. */
 .node.redex .dot,
 .node.redex .chip rect { stroke: var(--computation); stroke-width: 1.5; }
+
+/* The parts w, x, y, z of the rule being shown: dots filled, chips outlined. */
+.node.part-w .dot { fill: var(--part-w); }
+.node.part-x .dot { fill: var(--part-x); }
+.node.part-y .dot { fill: var(--part-y); }
+.node.part-z .dot { fill: var(--part-z); }
+.node.part-w .chip rect { stroke: var(--part-w); stroke-width: 3; }
+.node.part-x .chip rect { stroke: var(--part-x); stroke-width: 3; }
+.node.part-y .chip rect { stroke: var(--part-y); stroke-width: 3; }
+.node.part-z .chip rect { stroke: var(--part-z); stroke-width: 3; }
+.links line.part-w { stroke: var(--part-w); }
+.links line.part-x { stroke: var(--part-x); }
+.links line.part-y { stroke: var(--part-y); }
+.links line.part-z { stroke: var(--part-z); }
+
+/* An expanded variable: a hollow tag with its name (click to collapse). */
+.node .open-tag { display: none; cursor: pointer; }
+.node.open-var .open-tag { display: inline; }
+.node .open-tag rect { fill: var(--bg); stroke: var(--accent); stroke-width: 1.2; }
+.node .open-tag text { fill: var(--accent); font: 700 8px ui-monospace, Menlo, monospace; user-select: none; }
+.node .open-tag:hover rect { fill: color-mix(in srgb, var(--accent) 18%, var(--bg)); }
+#canvas .node .open-tag { cursor: pointer; }
+.node.leaving .open-tag { display: none; }
 
 /* Every redex has a K/S/F letter: click it to reduce that redex. */
 .node .badge { display: none; cursor: pointer; }
@@ -190,14 +222,36 @@ h1 {
   gap: 6px;
 }
 
-.row, .examples {
+.row, .add-row, .add-items {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
 }
-.examples { margin-top: 6px; }
+.examples { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
 .examples .label { color: var(--muted); font-size: 0.8rem; margin-right: 2px; }
+/* Examples and Yours fold open and closed. */
+.add-group summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.78rem;
+  user-select: none;
+  width: max-content;
+}
+.add-group summary:hover { color: var(--text); }
+.add-group[open] summary { margin-bottom: 4px; }
+/* Your variables scroll after about three rows. */
+.var-list { max-height: 92px; overflow-y: auto; padding: 1px; }
+.var-filter {
+  width: 100%;
+  margin-bottom: 4px;
+  font-size: 0.8rem;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
 .sep { width: 1px; height: 18px; background: var(--border); margin: 0 3px; }
 
 input, code { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
@@ -249,6 +303,20 @@ button.active { background: var(--accent); border-color: var(--accent); color: #
 
 /* Variables in the Add menu: yours can be forgotten with the ×. */
 .examples button.var { font-family: ui-monospace, Menlo, monospace; font-weight: 650; color: var(--accent); }
+.examples button { user-select: none; touch-action: none; }
+.drag-ghost {
+  position: fixed;
+  z-index: 4;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  padding: 2px 9px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font: 700 0.85rem ui-monospace, Menlo, monospace;
+  box-shadow: var(--shadow);
+  opacity: 0.9;
+}
 .examples .delete {
   margin-left: 5px;
   color: var(--muted);
@@ -365,12 +433,49 @@ button.active { background: var(--accent); border-color: var(--accent); color: #
 .playback #play-btn { min-width: 74px; }
 .playback #back-btn,
 .playback #fwd-btn { font-family: ui-monospace, Menlo, monospace; letter-spacing: -1px; }
-#scrub { flex: 1 1 120px; min-width: 90px; accent-color: var(--accent); }
-#frame-label { color: var(--muted); font-size: 0.78rem; flex: 1 0 100%; order: 10; }
+/* The label and the rule card sit above the controls, so nothing below them
+   moves when they appear; the controls stay on one row. */
+/* Top line: the step label on the left, the Colours toggle on the right. */
+.playback .status-row { flex: 1 0 100%; display: flex; align-items: center; gap: 8px; }
+#frame-label { color: var(--muted); font-size: 0.78rem; }
+.status-row .colours-toggle { margin-left: auto; }
+/* One row; the sliders shrink to fit. Only a phone-narrow panel wraps (inside the panel). */
+.playback .controls { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; white-space: nowrap; }
+#scrub { flex: 1 1 40px; min-width: 24px; accent-color: var(--accent); }
 #frame-label:empty { display: none; }
-.play-speed { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 0.78rem; }
-.play-speed input { width: 70px; accent-color: var(--accent); }
+.play-speed { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 0.78rem; flex: 0 1 auto; min-width: 0; }
+.play-speed input { width: 70px; min-width: 32px; flex: 0 1 70px; accent-color: var(--accent); }
 .play-speed output { font-family: ui-monospace, Menlo, monospace; min-width: 2em; }
+.colours-toggle { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 0.78rem; }
+.colours-toggle input { accent-color: var(--accent); margin: 0; }
+
+/* The rule card: the rule being shown, with its parts in colour. */
+#rule-card {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 0;
+  font-size: 0.85rem;
+  padding-bottom: 5px;
+  margin-bottom: 1px;
+  border-bottom: 1px solid var(--border);
+}
+#rule-card[hidden] { display: none; }
+#rule-card .seg { padding: 0 9px; color: var(--muted); }
+#rule-card .seg:first-child { padding-left: 0; }
+/* a thin divider between segments */
+#rule-card .seg + .seg { border-left: 1px solid var(--border); }
+#rule-card .seg b, #rule-card .seg code { color: var(--text); }
+/* Before the rule fires the left side is lit; after, the right side. */
+#rule-card .eq .lhs, #rule-card .eq .rhs { transition: opacity 0.2s; }
+#rule-card:not(.done) .eq .rhs, #rule-card.done .eq .lhs { opacity: 0.35; }
+#rule-card .eq { font-size: 0.95rem; }
+#rule-card .part-w, #rule-card .part-x, #rule-card .part-y, #rule-card .part-z { font-weight: 800; font-family: ui-monospace, Menlo, monospace; }
+#rule-card .part-w { color: var(--part-w); }
+#rule-card .part-x { color: var(--part-x); }
+#rule-card .part-y { color: var(--part-y); }
+#rule-card .part-z { color: var(--part-z); }
 
 /* Bottom right: a ⚙ button that stays in place; the tuning sliders pop up
    above it (outside the strip's layout, so nothing else moves). */
@@ -412,12 +517,12 @@ button.active { background: var(--accent); border-color: var(--accent); color: #
 /* Narrow screens: panels take the full width and stack. */
 /* Not enough room to centre it beside the side panels: back into the row. */
 @media (max-width: 1060px) {
-  .playback { position: static; transform: none; width: auto; flex: 1 1 420px; }
+  .playback { position: static; transform: none; width: auto; flex: 1 1 480px; }   /* wide enough with the slider shown, so it never re-wraps */
 }
 
 @media (max-width: 720px) {
   .top-left, .bottom-left, .playback { flex-basis: 100%; width: 100%; }
   .top-right { flex-direction: row; flex-wrap: wrap; align-items: center; }
-  .examples { flex-wrap: nowrap; overflow-x: auto; }
+  .add-row { flex-wrap: nowrap; overflow-x: auto; }
   .help { top: auto; bottom: 150px; }
 }
