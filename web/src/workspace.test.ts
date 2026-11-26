@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   addFragment, addLeafAt, addTree, allWorkspaceIds, collapseChip, emptyWorkspace, expandChip, getTree, joinTrees,
-  layoutOf, makeRoom, moveTree, setAllBelow, nameAt, pasteOnto, PUSH_GAP, removeAt, removeTree, replaceTree, stepTree, tearOff, unfoldFor, type Workspace,
+  layoutOf, makeRoom, moveTree, spreadApart, setAllBelow, nameAt, pasteOnto, PUSH_GAP, removeAt, removeTree, replaceTree, stepTree, tearOff, unfoldFor, type Workspace,
 } from './workspace'
 import { fragmentAt } from './marks'
 import { idSource, sameShape } from './ids'
@@ -278,5 +278,35 @@ describe('expand all / collapse all', () => {
     // only below a node: K (an argument of S) alone
     ws = setAllBelow(ws, 't1', [4], true).ws
     expect([...ws.marks.values()].filter((m) => m.expanded).map((m) => m.name)).toEqual(['K'])
+  })
+})
+
+describe('views and footprints (milestone 12)', () => {
+  const boxIn = (ws: Workspace, key: string, view: 'tidy' | 'organic') => {
+    const t = getTree(ws, key)!
+    const b = layoutOf(t, ws.marks, view).box
+    return { minX: b.minX + t.x, maxX: b.maxX + t.x }
+  }
+
+  it('spreadApart pushes overlapping trees apart for drawing, in the current view', () => {
+    const newId = idSource()
+    let ws = addTree(emptyWorkspace(), parse('△ (△△△) (△△△) (△△△)'), newId).ws
+    ws = addTree(ws, parse('△△'), newId, { x: 20, y: 0 }).ws   // on top of t1
+    ws = { ...ws, selected: 't1' }
+    for (const view of ['tidy', 'organic'] as const) {
+      expect(boxIn(ws, 't1', view).maxX).toBeGreaterThan(boxIn(ws, 't2', view).minX)
+      const spread = spreadApart(ws, view)
+      expect(boxIn(spread, 't2', view).minX).toBeGreaterThanOrEqual(boxIn(spread, 't1', view).maxX + PUSH_GAP - 1e-9)
+      expect(getTree(spread, 't1')!.x).toBe(getTree(ws, 't1')!.x)   // the selected tree stays put
+    }
+    expect(getTree(ws, 't2')!.x).toBe(20)                           // nothing stored changed
+  })
+
+  it('spreadApart leaves trees that already have room alone', () => {
+    const newId = idSource()
+    let ws = addTree(emptyWorkspace(), parse('△△'), newId).ws
+    ws = addTree(ws, parse('△△'), newId).ws
+    expect(spreadApart(ws, 'tidy')).toBe(ws)
+    expect(spreadApart(emptyWorkspace(), 'organic').trees).toEqual([])
   })
 })

@@ -11,7 +11,7 @@ import {
   NO_MARKS, carryMarks, chipsToUnfold, collapsedChips, insideIds, marksBelow, placeMarks, pruneMarks, revealDiff, sameTree, setExpanded,
   type Fragment, type Marks, type PathMark,
 } from './marks'
-import { layoutTree } from './render'
+import { layoutFor, type View } from './views'
 
 export type PlacedTree = {
   key: string     // which tree this is (stays the same while the tree is edited)
@@ -69,9 +69,9 @@ function nextFreeX(ws: Workspace, tree: Tree, ids: IdTree, marks: Marks): number
   return right + TREE_GAP - layoutOf({ tree, ids }, marks).bounds.minX
 }
 
-/** A tree's tidy layout, with its collapsed variables as single chips. */
-export function layoutOf(t: { tree: Tree; ids: IdTree }, marks: Marks) {
-  return layoutTree(t.tree, collapsedChips(t.ids, marks))
+/** A tree's layout in a view (Tidy unless given), with its collapsed variables as single chips. */
+export function layoutOf(t: { tree: Tree; ids: IdTree }, marks: Marks, view: View = 'tidy') {
+  return layoutFor(view, t.tree, collapsedChips(t.ids, marks))
 }
 
 export function addTree(
@@ -295,13 +295,14 @@ function findIds(t: IdTree, id: string): IdTree | undefined {
 
 // --- Keeping trees apart --------------------------------------------------------
 
-/** Space kept between a growing tree and the trees it pushes aside. */
-export const PUSH_GAP = 40
+/** Space kept between a growing tree's footprint (its nodes, chips and
+ *  badges) and the trees it pushes aside. */
+export const PUSH_GAP = 16
 
 type Box = { minX: number; maxX: number; minY: number; maxY: number }
 
-function boxOf(t: PlacedTree, marks: Marks): Box {
-  const b = layoutOf(t, marks).bounds
+function boxOf(t: PlacedTree, marks: Marks, view: View): Box {
+  const b = layoutOf(t, marks, view).box
   return { minX: b.minX + t.x, maxX: b.maxX + t.x, minY: b.minY + t.y, maxY: b.maxY + t.y }
 }
 
@@ -309,10 +310,10 @@ function boxOf(t: PlacedTree, marks: Marks): Box {
  *  grows during a reduction). Trees to its right move right, trees to its left
  *  move left, and a pushed tree pushes the next one along. Trees only ever
  *  move away: nothing is pulled back when `key` shrinks. */
-export function makeRoom(ws: Workspace, key: string): Workspace {
+export function makeRoom(ws: Workspace, key: string, view: View = 'tidy'): Workspace {
   const me = getTree(ws, key)
   if (!me || ws.trees.length < 2) return ws
-  const mine = boxOf(me, ws.marks)
+  const mine = boxOf(me, ws.marks, view)
   const centre = (mine.minX + mine.maxX) / 2
   const overlapsY = (a: Box, b: Box) => a.minY < b.maxY + PUSH_GAP && b.minY < a.maxY + PUSH_GAP
   const moved = new Map<string, number>()   // key -> new x
@@ -320,7 +321,7 @@ export function makeRoom(ws: Workspace, key: string): Workspace {
   for (const side of [1, -1] as const) {
     const others = ws.trees
       .filter((t) => t.key !== key)
-      .map((t) => ({ t, box: boxOf(t, ws.marks) }))
+      .map((t) => ({ t, box: boxOf(t, ws.marks, view) }))
       .filter(({ box }) => Math.sign((box.minX + box.maxX) / 2 - centre || 1) === side)
       .sort((a, b) => side * (a.box.minX - b.box.minX))
     const obstacles: Box[] = [mine]
@@ -339,6 +340,15 @@ export function makeRoom(ws: Workspace, key: string): Workspace {
   }
   if (moved.size === 0) return ws
   return { ...ws, trees: ws.trees.map((t) => (moved.has(t.key) ? { ...t, x: moved.get(t.key)! } : t)) }
+}
+
+/** Where the trees are *drawn* in a view: like makeRoom around the selected
+ *  tree (or the first), so trees placed for another view, or recorded in
+ *  undo snapshots and run frames, never overlap. Only for display: nothing
+ *  stored changes, and trees are only ever pushed apart. */
+export function spreadApart(ws: Workspace, view: View): Workspace {
+  const key = getTree(ws, ws.selected)?.key ?? ws.trees[0]?.key
+  return key === undefined ? ws : makeRoom(ws, key, view)
 }
 
 /** Expand (or collapse) every variable in the subtree at `path`, the node's

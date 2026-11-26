@@ -38,8 +38,11 @@ import {
 } from './camera'
 import {
   CHIP_HEIGHT, COMPUTATION_RADIUS, NODE_RADIUS,
-  chipLabel, chipWidth, layoutTree, samePath, type ChipsByPath, type NodeKind,
+  chipLabel, chipWidth, samePath, type ChipsByPath, type NodeKind,
 } from './render'
+import {
+  CHILD_ORDER, PULL_SCALE, badgeOffset, laterward, layoutFor, orderAngle, tagOffset, turnBetween, type View,
+} from './views'
 
 // --- Tuning ----------------------------------------------------------------
 
@@ -68,16 +71,22 @@ const COLLIDE_RADIUS = NODE_RADIUS + 3
 const MIN_SIBLING_GAP = 2 * NODE_RADIUS + 4
 // Siblings are never allowed closer than this while one of them is dragged.
 const HARD_SIBLING_GAP = 2
-// How long vanishing nodes take to fade out at speed 1 (slower speeds fade
-// proportionally slower). style.css reads the actual value from --leave-ms.
-const LEAVE_MS = 0   // experiment: vanishing nodes and links go at once (was 350)
+// How long vanishing nodes take to fade out at speed 1, when fading is on
+// (slower speeds fade proportionally slower; off: they go at once, the
+// default). style.css reads the actual value from --leave-ms.
+const FADE_MS = 350
 
 // A press that moves less than this (screen pixels) is a click, not a drag.
 const CLICK_SLOP = 4
 // While carrying a tree, a node of another tree this close (SVG units) is the drop target.
 const DROP_RADIUS = 24
-// Where a redex's K/S/F badge sits: up and to the right of the node.
-const BADGE_OFFSET = 14
+
+// After a view change, the soft order push stays off for this many physics
+// ticks, while nodes glide to their new places.
+const ORDER_PAUSE_TICKS = 150
+// ...and the development order check waits this many more, while the push
+// sorts out any pair that is still crossed.
+const ORDER_GRACE_TICKS = 90
 
 // How long the camera takes to glide somewhere (ms).
 const GLIDE_MS = 450
@@ -97,6 +106,9 @@ export type SimNode = SimulationNodeDatum & {
   targetX: number
   targetY: number
   children: SimNode[]   // in branch order (first branch first)
+  /** How this node's children are kept in order: by angle around `pivot`
+   *  (see views.ts); unset or null = by x, left to right. */
+  order?: { pivot: SimNode; seam: number; spin: 1 | -1 } | null
 }
 
 type SimLink = SimulationLinkDatum<SimNode> & {
@@ -109,8 +121,40 @@ export function pathId(path: Path): string {
   return 'n' + path.map((i) => '.' + i).join('')
 }
 
+/** Where a node will be after this tick (a dragged node stays at fx, fy). */
+const nextX = (n: SimNode) => n.fx ?? n.x! + n.vx!
+const nextY = (n: SimNode) => n.fy ?? n.y! + n.vy!
+
+/** How far apart two neighbouring siblings are along their row (x), or
+ *  along their arc around the pivot, where they're about to be. Negative:
+ *  they've swapped. */
+function siblingGap(parent: SimNode, left: SimNode, right: SimNode, where: (n: SimNode) => [number, number]): number {
+  const o = parent.order
+  const [lx, ly] = where(left)
+  const [rx, ry] = where(right)
+  if (!o) return rx - lx
+  const [px, py] = where(o.pivot)
+  const rl = Math.hypot(lx - px, ly - py)
+  const rr = Math.hypot(rx - px, ry - py)
+  if (rl < 1 || rr < 1) return Infinity   // sitting on the pivot: no angle to keep
+  return turnBetween(orderAngle(px, py, lx, ly, o), orderAngle(px, py, rx, ry, o)) * (rl + rr) / 2
+}
+
+/** The direction that moves a sibling "later" in its row: right, or round the pivot. */
+function laterDir(parent: SimNode, n: SimNode, where: (n: SimNode) => [number, number]): { x: number; y: number } {
+  const o = parent.order
+  if (!o) return { x: 1, y: 0 }
+  const [px, py] = where(o.pivot)
+  const [x, y] = where(n)
+  return laterward(px, py, x, y, o.spin)
+}
+
+const soon = (n: SimNode): [number, number] => [n.x! + n.vx!, n.y! + n.vy!]
+const next = (n: SimNode): [number, number] => [nextX(n), nextY(n)]
+
 /** A custom force: if two neighbouring siblings get too close or swap,
- *  push them back apart so the first branch stays on the left. */
+ *  push them back apart so the first branch stays first: on the left (by x),
+ *  or first going round the pivot (by angle; see `SimNode.order`). */
 export function forceSiblingOrder(minGap = MIN_SIBLING_GAP) {
   let nodes: SimNode[] = []
   let strength = DEFAULT_PARAMS.orderStrength
@@ -121,18 +165,19 @@ export function forceSiblingOrder(minGap = MIN_SIBLING_GAP) {
       for (let i = 1; i < c.length; i++) {
         const left = c[i - 1]
         const right = c[i]
-        // Compare where they are about to be (position + velocity).
-        const gap = (right.x! + right.vx!) - (left.x! + left.vx!)
-        const shortBy = minGap - gap
+        // Compare where they are about to be (position + velocity). A pair
+        // that has slipped right round (by angle) only gets a capped push.
+        const shortBy = Math.min(minGap - siblingGap(parent, left, right, soon), parent.order ? minGap : Infinity)
         if (shortBy <= 0) continue
         const push = shortBy * strength
+        const l = laterDir(parent, left, soon)
+        const r = laterDir(parent, right, soon)
         // A pinned (dragged) node can't move, so its sibling takes the whole push.
-        if (left.fx != null) right.vx! += push
-        else if (right.fx != null) left.vx! -= push
-        else {
-          left.vx! -= push / 2
-          right.vx! += push / 2
-        }
+        const [pl, pr] = left.fx != null ? [0, push] : right.fx != null ? [push, 0] : [push / 2, push / 2]
+        left.vx! -= l.x * pl
+        left.vy! -= l.y * pl
+        right.vx! += r.x * pr
+        right.vy! += r.y * pr
       }
     }
     // Hard rule on top of the soft push above, for rows where a node is being
@@ -144,33 +189,67 @@ export function forceSiblingOrder(minGap = MIN_SIBLING_GAP) {
     for (const parent of nodes) {
       const c = parent.children
       if (!c.some((n) => n.fx != null)) continue
-      for (let i = 1; i < c.length; i++) keepApart(c[i - 1], c[i], 'right')
-      for (let i = c.length - 1; i >= 1; i--) keepApart(c[i - 1], c[i], 'left')
+      for (let i = 1; i < c.length; i++) keepApart(parent, c[i - 1], c[i], 'right')
+      for (let i = c.length - 1; i >= 1; i--) keepApart(parent, c[i - 1], c[i], 'left')
     }
   }
 
-  // Where a node will be after this tick (a dragged node stays at fx).
-  const nextX = (n: SimNode) => n.fx ?? n.x! + n.vx!
-
-  function keepApart(left: SimNode, right: SimNode, shove: 'left' | 'right'): void {
-    const shortBy = HARD_SIBLING_GAP - (nextX(right) - nextX(left))
+  function keepApart(parent: SimNode, left: SimNode, right: SimNode, shove: 'left' | 'right'): void {
+    const shortBy = HARD_SIBLING_GAP - siblingGap(parent, left, right, next)
     if (shortBy <= 0) return
-    if (left.fx != null) right.x! += shortBy
-    else if (right.fx != null) left.x! -= shortBy
-    else if (shove === 'right') right.x! += shortBy
-    else left.x! -= shortBy
+    const o = parent.order
+    // Move the free one directly, so that where it's about to be is far
+    // enough along: by x, or by turning it round the pivot by exactly the
+    // missing angle (the gap is an arc at the pair's mean radius).
+    const move = (n: SimNode, by: number) => {
+      if (!o) {
+        n.x! += by
+        return
+      }
+      const [px, py] = next(o.pivot)
+      const [lx, ly] = next(left)
+      const [rx, ry] = next(right)
+      const turn = (o.spin * by) / ((Math.hypot(lx - px, ly - py) + Math.hypot(rx - px, ry - py)) / 2)
+      const [x, y] = next(n)
+      const c = Math.cos(turn)
+      const s = Math.sin(turn)
+      n.x! = px + (x - px) * c - (y - py) * s - n.vx!   // keep its velocity: shift where it is
+      n.y! = py + (x - px) * s + (y - py) * c - n.vy!
+    }
+    if (left.fx != null) move(right, shortBy)
+    else if (right.fx != null) move(left, -shortBy)
+    else if (shove === 'right') move(right, shortBy)
+    else move(left, -shortBy)
   }
   force.initialize = (ns: SimNode[]) => { nodes = ns }
   force.strength = (s: number) => { strength = s; return force }
   return force
 }
 
+/** One force (repulsion, collision) run separately on two groups of nodes. */
+type GroupForce = ((alpha: number) => void) & {
+  initialize?: (nodes: SimNode[], random: () => number) => void
+}
+function byGroup(a: GroupForce, b: GroupForce, inB: (n: SimNode) => boolean) {
+  let all: SimNode[] = []
+  let random: () => number = Math.random
+  const force = (alpha: number) => { a(alpha); b(alpha) }
+  /** Re-sort the nodes into the two groups (call when the groups change). */
+  force.regroup = () => {
+    a.initialize?.(all.filter((n) => !inB(n)), random)
+    b.initialize?.(all.filter(inB), random)
+  }
+  force.initialize = (nodes: SimNode[], r: () => number) => { all = nodes; random = r; force.regroup() }
+  return force
+}
+
 /** How many sibling pairs are currently out of order (should always be 0). */
 export function countOrderViolations(nodes: Iterable<SimNode>): number {
   let count = 0
+  const now = (n: SimNode): [number, number] => [n.x!, n.y!]
   for (const parent of nodes) {
     const c = parent.children
-    for (let i = 1; i < c.length; i++) if (c[i].x! < c[i - 1].x!) count++
+    for (let i = 1; i < c.length; i++) if (siblingGap(parent, c[i - 1], c[i], now) < 0) count++
   }
   return count
 }
@@ -245,10 +324,23 @@ export class Scene {
   private readonly sim: Simulation<SimNode, SimLink>
   private readonly linkForce: ForceLink<SimNode, SimLink>
   private readonly charge: ForceManyBody<SimNode>
+  private readonly carriedCharge: ForceManyBody<SimNode>
+  /** Repulsion and collision act within two groups: the tree being carried,
+   *  and everything else. So a carried tree passes over other trees instead
+   *  of shoving the node you're aiming at out of the way. */
+  private readonly regroup: () => void
   private readonly pullX: ForceX<SimNode>
   private readonly pullY: ForceY<SimNode>
   private readonly order = forceSiblingOrder()
   private params: PhysicsParams = { ...DEFAULT_PARAMS }
+  /** How trees are laid out (views.ts). */
+  private view: View = 'tidy'
+  /** Do vanishing nodes fade out (FADE_MS), or go at once? */
+  private fade = false
+  /** Physics ticks left before the soft sibling-order push comes back on
+   *  after a view change (see setView). It goes on counting down past 0 to
+   *  -ORDER_GRACE_TICKS, while the push sorts out the last few rows. */
+  private orderPause = -ORDER_GRACE_TICKS
 
   /** Pressed on a node, not yet moved far enough to count as a drag. */
   private pressed: { node: SimNode; pointerId: number; clientX: number; clientY: number; shiftKey: boolean } | null = null
@@ -285,13 +377,19 @@ export class Scene {
       .id((n) => n.id)
       .distance((l) => Math.hypot(l.target.targetX - l.source.targetX, l.target.targetY - l.source.targetY))
     this.charge = forceManyBody<SimNode>().distanceMax(90)
+    this.carriedCharge = forceManyBody<SimNode>().distanceMax(90)
+    const radius = (n: SimNode) => (n.chip ? chipWidth(n.chip) / 2 + 3 : COLLIDE_RADIUS)
+    const isCarried = (n: SimNode) => this.dragging?.carry != null && n.treeKey === this.dragging.node.treeKey
+    const charge = byGroup(this.charge, this.carriedCharge, isCarried)
+    const collide = byGroup(forceCollide<SimNode>(radius), forceCollide<SimNode>(radius), isCarried)
+    this.regroup = () => { charge.regroup(); collide.regroup() }
     this.pullX = forceX<SimNode>((n) => n.targetX)
     this.pullY = forceY<SimNode>((n) => n.targetY)
 
     this.sim = forceSimulation<SimNode, SimLink>([])
       .force('link', this.linkForce)
-      .force('charge', this.charge)
-      .force('collide', forceCollide<SimNode>((n) => (n.chip ? chipWidth(n.chip) / 2 + 3 : COLLIDE_RADIUS)))
+      .force('charge', charge)
+      .force('collide', collide)
       .force('pullX', this.pullX)
       .force('pullY', this.pullY)
       .force('order', this.order)
@@ -313,9 +411,10 @@ export class Scene {
     const q = this.params
     this.linkForce.strength(q.linkStrength)
     this.charge.strength(-q.repulsion)
-    this.pullX.strength(q.pullX)
-    this.pullY.strength(q.pullY)
-    this.order.strength(q.orderStrength)
+    this.carriedCharge.strength(-q.repulsion)
+    this.pullX.strength(q.pullX * PULL_SCALE[this.view])
+    this.pullY.strength(q.pullY * PULL_SCALE[this.view])
+    if (this.orderPause <= 0) this.order.strength(q.orderStrength)
     this.sim.velocityDecay(q.damping)
     this.svg.style.setProperty('--leave-ms', `${Math.round(this.leaveMs())}ms`)
     this.sim.alpha(Math.max(this.sim.alpha(), 0.3))
@@ -330,7 +429,35 @@ export class Scene {
 
   /** Fade-out time at the current speed. */
   private leaveMs(): number {
-    return LEAVE_MS / Math.max(this.params.speed, 0.05)
+    return (this.fade ? FADE_MS : 0) / Math.max(this.params.speed, 0.05)
+  }
+
+  getView(): View {
+    return this.view
+  }
+
+  /** Lay trees out another way. Takes effect at the next setWorkspace(),
+   *  where every node glides to its new place. */
+  setView(view: View): void {
+    if (view === this.view) return
+    this.view = view
+    this.setParams({})   // the pull strength depends on the view
+    // Each view measures branch order its own way (by x, or by angle around
+    // the parent), so on the way from one to the other a row can look
+    // "swapped" and the order push would hold it back. Let every node glide
+    // straight to its new target (those are in order) first.
+    this.orderPause = ORDER_PAUSE_TICKS
+    this.order.strength(0)
+  }
+
+  /** Fade vanishing nodes out (on) or remove them at once (off, the default). */
+  setFade(on: boolean): void {
+    this.fade = on
+    this.setParams({})
+  }
+
+  getFade(): boolean {
+    return this.fade
   }
 
   // --- Animation loop ---------------------------------------------------------
@@ -351,6 +478,7 @@ export class Scene {
     this.frame = null
     this.tickBudget += this.dragging ? 1 : this.params.speed
     while (this.tickBudget >= 1) {
+      if (this.orderPause > -ORDER_GRACE_TICKS && --this.orderPause === 0) this.order.strength(this.params.orderStrength)
       for (const n of this.nodes.values()) { n.prevX = n.x; n.prevY = n.y }
       this.sim.tick()
       this.tickBudget -= 1
@@ -448,10 +576,11 @@ export class Scene {
     this.treeBounds = new Map()
 
     for (const t of trees) {
-      const layout = layoutTree(t.tree, t.chips)
+      const layout = layoutFor(this.view, t.tree, t.chips)
+      const order = CHILD_ORDER[this.view]
       this.treeBounds.set(t.key, {
-        minX: layout.bounds.minX + t.x, maxX: layout.bounds.maxX + t.x,
-        minY: layout.bounds.minY + t.y, maxY: layout.bounds.maxY + t.y,
+        minX: layout.box.minX + t.x, maxX: layout.box.maxX + t.x,
+        minY: layout.box.minY + t.y, maxY: layout.box.maxY + t.y,
       })
 
       // The id of every node of this tree, looked up by its path.
@@ -481,9 +610,10 @@ export class Scene {
             fromY = origin.y! + 3
             sproutedFromOrigin.add(id)
           } else if (parent) {
-            // Otherwise start just below the parent, already in the right order.
+            // Otherwise start just off the parent, on the side it'll grow
+            // toward (in Tidy: just below it), already in the right order.
             fromX = parent.x! + (targetX - parent.targetX) * 0.2
-            fromY = parent.y! + 4
+            fromY = parent.y! + (order ? (targetY - parent.targetY) * 0.2 : 4)
           } else {
             fromX = targetX
             fromY = targetY
@@ -491,7 +621,7 @@ export class Scene {
           n = { id, treeKey: t.key, path: ln.path, kind: ln.kind, targetX, targetY, children: [], x: fromX, y: fromY, vx: 0, vy: 0 }
           const g = svgEl('g', { class: 'node' })
           g.dataset.id = id
-          const badge = svgEl('g', { class: 'badge', transform: `translate(${BADGE_OFFSET},${-BADGE_OFFSET})` })
+          const badge = svgEl('g', { class: 'badge' })
           badge.append(svgEl('rect', { x: -5.5, y: -6.5, width: 11, height: 13, rx: 3 }), svgEl('text', { 'text-anchor': 'middle', dy: '0.35em' }), svgEl('title'))
           const chip = svgEl('g', { class: 'chip' })
           chip.append(svgEl('rect', { height: CHIP_HEIGHT, y: -CHIP_HEIGHT / 2, rx: CHIP_HEIGHT / 2 }), svgEl('text', { 'text-anchor': 'middle', dy: '0.35em' }))
@@ -508,6 +638,7 @@ export class Scene {
         n.targetX = targetX
         n.targetY = targetY
         n.children = []
+        n.order = order ? { pivot: n, seam: order.seam, spin: order.spin } : null
         parent?.children.push(n)
         next.set(id, n)
         byPath.set(pathId(ln.path), n)
@@ -536,16 +667,19 @@ export class Scene {
         }
         g.setAttribute('class', classes.join(' '))
         g.querySelector('.dot')!.setAttribute('r', String(ln.kind === 'computation' ? COMPUTATION_RADIUS : NODE_RADIUS))
-        // The K/S/F badge sits up and to the right, outside a wide chip too.
-        const bx = ln.chip ? chipWidth(ln.chip) / 2 + 6 : BADGE_OFFSET
-        g.querySelector('.badge')!.setAttribute('transform', `translate(${bx},${-BADGE_OFFSET})`)
-        // An expanded variable gets a hollow tag with its name, up and to the left: click to collapse.
+        // The K/S/F badge: in Tidy up and to the right (outside a wide chip
+        // too); in the other views, in the widest free angle around the node.
+        const b = badgeOffset(ln)
+        g.querySelector('.badge')!.setAttribute('transform', `translate(${b.x.toFixed(1)},${b.y.toFixed(1)})`)
+        // An expanded variable gets a hollow tag with its name (in Tidy up and
+        // to the left; otherwise beside the badge): click to collapse.
         const open = t.openVars?.get(ln.path.join('.'))
         g.classList.toggle('open-var', !!open)
         if (open) {
           const tw = 8 + chipLabel(open.name).length * 5.6
           const tag = g.querySelector('.open-tag')!
-          tag.setAttribute('transform', `translate(${-(BADGE_OFFSET + tw / 2 - 6)},${-BADGE_OFFSET})`)
+          const at = tagOffset(ln, tw)
+          tag.setAttribute('transform', `translate(${at.x.toFixed(1)},${at.y.toFixed(1)})`)
           const rect = tag.querySelector('rect')!
           rect.setAttribute('width', String(tw))
           rect.setAttribute('x', String(-tw / 2))
@@ -559,7 +693,8 @@ export class Scene {
       }
     }
 
-    this.placeNewNodesInOrder(next, (id) => old.has(id) || sproutedFromOrigin.has(id))
+    // (By x only: in the other views the order force sorts new nodes out.)
+    if (this.view === 'tidy') this.placeNewNodesInOrder(next, (id) => old.has(id) || sproutedFromOrigin.has(id))
 
     // Nodes that are gone: out of the simulation now, off the screen after a fade.
     for (const id of old.keys()) {
@@ -688,8 +823,11 @@ export class Scene {
 
     // Development check: branches must never swap sides at rest or while
     // dragging. (During the first moments after a reduction step, subtrees
-    // are still travelling to their new places, so that's not checked.)
-    if (import.meta.env.DEV && (this.dragging !== null || this.sim.alpha() < 0.05)) {
+    // are still travelling to their new places, so that's not checked; nor
+    // just after a view change, when a row may really turn round: in Organic
+    // a branch heading sideways has its own branches one above the other.)
+    // Dragging is always checked.
+    if (import.meta.env.DEV && (this.dragging !== null || (this.orderPause <= -ORDER_GRACE_TICKS && this.sim.alpha() < 0.05))) {
       const bad = countOrderViolations(this.nodes.values())
       this.svg.dataset.orderViolations = String(bad)
       if (bad > 0 && !this.warnedAboutOrder) {
@@ -756,10 +894,22 @@ export class Scene {
       return
     }
     d.carry = new Map()
+    this.markCarried(d.node.treeKey)
     for (const n of this.nodes.values()) {
       if (n.treeKey === d.node.treeKey) d.carry.set(n, { dx: n.targetX - d.node.targetX, dy: n.targetY - d.node.targetY })
     }
     this.moveCarried(d.node.fx ?? d.node.x!, d.node.fy ?? d.node.y!)
+  }
+
+  /** The carried tree (or none) gets its own repulsion and collision group,
+   *  and is drawn see-through so the node you're aiming at stays visible. */
+  private markCarried(treeKey: string | null): void {
+    this.regroup()
+    for (const n of this.nodes.values()) {
+      const on = n.treeKey === treeKey
+      this.nodeEls.get(n.id)?.classList.toggle('carried', on)
+      this.linkEls.get(n.id)?.classList.toggle('carried', on)
+    }
   }
 
   private moveCarried(x: number, y: number): void {
@@ -802,7 +952,9 @@ export class Scene {
     this.nodeEls.get(d.node.id)?.classList.remove('dragging')
     this.svg.classList.remove('carrying')
     this.setDropTarget(null)
+    const wasCarrying = d.carry !== null
     this.dragging = null
+    if (wasCarrying) this.markCarried(null)
     this.sim.alphaTarget(0)  // cool down and come to rest
   }
 

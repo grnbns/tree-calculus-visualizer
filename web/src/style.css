@@ -135,6 +135,10 @@ html, body {
 /* With several trees, the unselected ones step back a little. */
 .node.dim, .links line.dim { opacity: 0.5; }
 
+/* A tree carried by its root is see-through (all but the root you hold), so
+   the node you're aiming at shows through it. */
+.node.carried:not(.dragging), .links line.carried { opacity: 0.4; }
+
 /* A node of another tree that a carried tree would be attached to. */
 .node.drop-target { opacity: 1; }
 .node.drop-target .dot {
@@ -366,6 +370,10 @@ button.active { background: var(--accent); border-color: var(--accent); color: #
 .modes button { border: none; border-radius: 0; padding: 4px 12px; }
 .modes button + button { border-left: 1px solid var(--border); }
 .modes button.active { background: var(--accent); color: #fff; }
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.segmented button { border: none; border-radius: 0; padding: 3px 9px; font-size: 0.8rem; }
+.segmented button + button { border-left: 1px solid var(--border); }
+.segmented button.active { background: var(--accent); color: #fff; }
 
 /* Help popover, under the tools. */
 .help {
@@ -504,7 +512,16 @@ button.active { background: var(--accent); border-color: var(--accent); color: #
   color: var(--muted);
 }
 .tuning[hidden] { display: none; }
-#sliders { display: grid; gap: 4px; margin-bottom: 6px; width: min(320px, calc(100vw - 48px)); }
+/* Settings: View and Animation speed up front, the physics folded away. */
+.tuning { display: grid; gap: 8px; width: min(320px, calc(100vw - 48px)); }
+.settings-head { color: var(--text); font-weight: 600; font-size: 0.85rem; }
+.setting { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+#physics summary { cursor: pointer; user-select: none; width: max-content; }
+#physics summary:hover { color: var(--text); }
+#physics[open] summary { margin-bottom: 6px; }
+.check { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.check input { accent-color: var(--accent); margin: 0; }
+#sliders { display: grid; gap: 4px; margin-bottom: 6px; }
 .slider {
   display: grid;
   grid-template-columns: 120px 1fr 40px;

@@ -39,7 +39,12 @@ These are the book's rules. treecalcul.us uses a different variant, so its examp
   - If a reduction ends in exactly one of your variables, the result folds back into its chip. Play on a tree that's already a value shows what it is: `succ 0` becomes `1`.
 - **Copy and paste.** ⌘/Ctrl+C copies the subtree under the pointer as △ text. ⌘/Ctrl+V pastes onto the node under the pointer, or as a new tree on empty canvas. The right-click menu does the same.
 - **Undo and redo** (⌘/Ctrl+Z, ⌘/Ctrl+Shift+Z). A whole reduction counts as one action.
-- **View.** Drag empty space or scroll to pan. Pinch, or ⌘/Ctrl + scroll, to zoom. **F** fits everything on screen, and **?** shows help.
+- **Moving around.** Drag empty space or scroll to pan. Pinch, or ⌘/Ctrl + scroll, to zoom. **F** fits everything on screen, and **?** shows help.
+- **Settings (⚙, bottom right).** Choose how trees are drawn (**V** switches between the two views):
+  - **Tidy:** every level on its own row, with branches straight down.
+  - **Organic:** drawn the way the book draws trees. Every edge is the same length and a stem carries straight on. A fork's branches are balanced by weight, so a leaf beside a big subtree swings out to the side. Edges never cross once the motion settles.
+
+  Switching views animates, even during a reduction. **Animation speed** makes the motion slower or faster. Both are remembered. The **Physics** section holds the tuning sliders.
 - **Link to a tree.** `?t=<tree>` in the URL sets the starting tree, e.g. `?t=S K K △`.
 
 ## Running it
@@ -64,7 +69,8 @@ The app is TypeScript with Vite, d3-force for the physics and d3-hierarchy for t
 | `marks.ts`, `vars.ts` | Variables: which subtrees show as chips, and when a step has to open one. Also definitions and browser storage. |
 | `parts.ts` | Which nodes are w, x, y and z in a rule, before and after it fires (for the colours). |
 | `edit.ts`, `workspace.ts`, `run.ts` | Pure models: edits, a canvas of several trees with undo snapshots, and a reduction run you can scrub through. |
-| `render.ts`, `scene.ts`, `camera.ts` | Tidy layout, the live force simulation and drawing, and pan/zoom. |
+| `render.ts`, `views.ts` | The layouts: Tidy, and Organic (the book's way of drawing trees, without crossing edges). |
+| `scene.ts`, `camera.ts` | The live force simulation and drawing, and pan/zoom. |
 | `main.ts` | The UI: panels, menus, keyboard shortcuts and playback. |
 
 Most of the logic is in pure modules with Vitest tests. `scene.ts` reports clicks and drags to `main.ts` and never changes trees itself.
@@ -75,4 +81,4 @@ The repository root has the original Python engine (`reduction_logic.py`, `parse
 
 ## Status
 
-See [PLAN.md](PLAN.md) for the milestones. Milestones 0–11 are done: engine, drawing, motion, building, reducing, the full-screen canvas, copy, paste and variables, the rule card and colours for learners, and the book's trees and notation. Next are a Settings panel with other ways to view a tree (radial and organic), guided lessons, defining your own templates, and touch support. A public deploy comes last.
+See [PLAN.md](PLAN.md) for the milestones. Milestones 0–12 are done: engine, drawing, motion, building, reducing, the full-screen canvas, copy, paste and variables, the rule card and colours for learners, the book's trees and notation, and Settings with a choice of view. Next are guided lessons, defining your own templates, and touch support. A public deploy comes last.

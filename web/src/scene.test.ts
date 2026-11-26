@@ -71,3 +71,48 @@ describe('forceSiblingOrder', () => {
     expect(b.vx).toBe(16)
   })
 })
+
+describe('forceSiblingOrder by angle (Spiderweb, Organic)', () => {
+  // Children of p ordered clockwise from 12 o'clock around p itself.
+  const around = (p: SimNode) => { p.order = { pivot: p, seam: -Math.PI / 2, spin: 1 } }
+  const at = (id: string, x: number, y: number): SimNode => ({ ...node(id, x), y, targetY: y })
+
+  it('counts siblings that are round the wrong way', () => {
+    const a = at('a', 30, 0), b = at('b', 20, 20)   // a at 3 o'clock, b at half past 4: in order
+    const p = node('p', 0, [a, b]); around(p)
+    expect(countOrderViolations([p, a, b])).toBe(0)
+    p.children = [b, a]
+    expect(countOrderViolations([p, b, a])).toBe(1)
+  })
+
+  it('pushes swapped siblings back round into order', () => {
+    const a = at('a', 0, 30), b = at('b', 30, 0)   // first branch at 6 o'clock, second at 3: swapped
+    const p = node('p', 0, [a, b]); around(p)
+    const nodes = [p, a, b]
+    const force = forceSiblingOrder(16).strength(1)
+    force.initialize(nodes)
+    for (let t = 0; t < 40; t++) {
+      force()
+      for (const n of nodes) { n.x! += n.vx!; n.y! += n.vy!; n.vx = n.vy = 0 }
+    }
+    expect(countOrderViolations(nodes)).toBe(0)
+  })
+
+  it('is cyclic: a first branch dragged back over the top is not swapped with the others', () => {
+    const a = at('a', 25, -25), b = at('b', 30, 0), c = at('c', 0, 30)   // a dragged clockwise past 12 o'clock
+    const p = node('p', 0, [a, b, c]); around(p)
+    expect(countOrderViolations([p, a, b, c])).toBe(0)
+  })
+
+  it('never lets a dragged node cross its siblings', () => {
+    const a = at('a', 30, 0), b = at('b', 0, 30), c = at('c', -30, 0)   // 3, 6 and 9 o'clock
+    const p = node('p', 0, [a, b, c]); around(p)
+    const force = forceSiblingOrder(16).strength(0)
+    force.initialize([p, a, b, c])
+    a.fx = -10; a.fy = 28          // drag the first branch past the second
+    force()
+    const next = (n: SimNode) => ({ ...n, x: n.fx ?? n.x! + n.vx!, y: n.fy ?? n.y! + n.vy! })
+    const [na, nb, nc] = [next(a), next(b), next(c)]
+    expect(countOrderViolations([{ ...p, children: [na, nb, nc] }])).toBe(0)
+  })
+})

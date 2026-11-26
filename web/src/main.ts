@@ -5,7 +5,7 @@ import { Scene, DEFAULT_PARAMS, type PhysicsParams, type PointHit } from './scen
 import { idSource, idsAt } from './ids'
 import {
   addFragment, addLeafAt, addTree, collapseChip, emptyWorkspace, expandChip, getTree, joinTrees,
-  moveTree, nameAt, pasteOnto, recogniseResult, removeAt, replaceTree, selectTree, setAllBelow, tearOff,
+  moveTree, nameAt, pasteOnto, recogniseResult, removeAt, replaceTree, selectTree, setAllBelow, spreadApart, tearOff,
   type Change, type PlacedTree, type Workspace,
 } from './workspace'
 import {
@@ -13,6 +13,7 @@ import {
   type Fragment, type Marks,
 } from './marks'
 import { carryParts, partsOf, PART_PATHS, RULE_TEXT, type Parts } from './parts'
+import { VIEWS, isView, nextView, type View } from './views'
 import { defineVar, deleteVar, loadVarsReport, lookupIn, nameProblem, saveVars, showNamed, type Vars } from './vars'
 import {
   atEnd, back, beforeRule, currentWs, describeFrame, forward, nextRuleFrame, reduce, seek, startRun, stepsBefore,
@@ -35,6 +36,8 @@ const EXAMPLES: [label: string, text: string][] = [
   ['selfApply selfApply', 'selfApply selfApply'],
 ]
 const COLOURS_KEY = 'tree-calculus-colours'
+const VIEW_KEY = 'tree-calculus-view'
+const SPEED_KEY = 'tree-calculus-speed'
 const VARS_KEY = 'tree-calculus-vars'
 
 type Mode = 'add' | 'remove' | 'move'
@@ -90,7 +93,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <p><b>Variables:</b> right-click a node → <i>Name this…</i> (or the <b>Var</b> button) to save it as a variable (V, x2, isZero…). It shows as a chip; type its name (names need spaces between them: <i>S K V</i>) or use the Add menu to make more. Right-click a chip to expand it; <i>Expand all</i> / <i>Collapse all</i> do a whole subtree. An open variable shows its name in a hollow tag: click the tag to collapse it. Reductions open a chip only when a rule needs its insides.</p>
     <p><b>Add menu:</b> click a button to add a new tree, or drag it onto a node to attach it there.</p>
     <p><b>Copy and paste:</b> ⌘/Ctrl+C copies the subtree under the pointer (or the selected tree) as △ text; ⌘/Ctrl+V pastes onto the node under the pointer, or as a new tree. Also in the right-click menu.</p>
-    <p><b>View:</b> drag empty space or scroll to pan; ctrl/⌘ + scroll or pinch to zoom; F fits everything.</p>
+    <p><b>Moving around:</b> drag empty space or scroll to pan; ctrl/⌘ + scroll or pinch to zoom; F fits everything.</p>
+    <p><b>Settings</b> (⚙, bottom right): choose a <b>View</b>: Tidy (rows) or Organic (drawn as in the book: equal edges, a stem carries straight on, the heavier branch of a fork bends less). V switches between them. <b>Animation speed</b> slows the motion down or speeds it up.</p>
   </section>
 
   <div class="hud bottom">
@@ -122,14 +126,26 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </section>
 
   <section class="bottom-right">
-    <div class="panel tuning" id="tuning" hidden aria-label="Physics tuning">
-      <div id="sliders"></div>
-      <div class="row">
-        <button id="defaults-btn" type="button">Defaults</button>
-        <button id="copy-btn" type="button">Copy values</button>
+    <div class="panel tuning" id="tuning" hidden aria-label="Settings">
+      <div class="settings-head">Settings</div>
+      <div class="setting">
+        <span>View</span>
+        <div class="segmented" id="view-choice" role="radiogroup" aria-label="View"></div>
       </div>
+      <div id="speed-row"></div>
+      <details id="physics">
+        <summary>Physics</summary>
+        <div id="sliders"></div>
+        <label class="check" title="Removed nodes fade out instead of vanishing at once">
+          <input id="fade" type="checkbox" /> Fade removed nodes
+        </label>
+        <div class="row">
+          <button id="defaults-btn" type="button">Defaults</button>
+          <button id="copy-btn" type="button">Copy values</button>
+        </div>
+      </details>
     </div>
-    <button id="gear-btn" class="gear" type="button" title="Physics tuning" aria-label="Physics tuning"
+    <button id="gear-btn" class="gear" type="button" title="Settings" aria-label="Settings"
             aria-expanded="false" aria-controls="tuning">⚙</button>
   </section>
   </div>
@@ -387,8 +403,9 @@ function render(born?: ReadonlyMap<string, string>, absorbed?: ReadonlyMap<strin
   }
   lastDisplayMarks = display
   lastOpen = open.join()
+  // Drawn where they fit in the current view (nothing stored changes).
   scene.setWorkspace(
-    ws.trees.map((t) => ({
+    spreadApart(ws, scene.getView()).trees.map((t) => ({
       ...t,
       nextRedex: step(t.tree)?.path ?? null,
       redexes: allRedexes(t.tree),
@@ -664,7 +681,7 @@ function toggleHelp(show = helpPanel.hidden !== false): void {
 }
 helpBtn.addEventListener('click', () => toggleHelp())
 
-// The ⚙ button stays put; the tuning sliders pop up above it.
+// The ⚙ button stays put; the settings pop up above it.
 const gearBtn = $<HTMLButtonElement>('#gear-btn')
 const tuningPanel = $<HTMLElement>('#tuning')
 function toggleTuning(show = tuningPanel.hidden !== false): void {
@@ -1171,6 +1188,8 @@ document.addEventListener('keydown', (e) => {
     scene.zoomBy(0.8)
   } else if (!typing && plain && e.key === '?') {
     toggleHelp()
+  } else if (!typing && plain && (e.key === 'v' || e.key === 'V')) {
+    setView(nextView(scene.getView()))
   } else if (e.key === 'Escape') {
     closeMenu()
     toggleHelp(false)
@@ -1183,21 +1202,27 @@ document.addEventListener('keydown', (e) => {
 
 setMode('add')
 
-// --- Physics tuning sliders (temporary: tune by eye, then hard-code the
-// values you like into DEFAULT_PARAMS in scene.ts) --------------------------
+// --- Settings (milestone 12): the view, the animation speed, and the physics
+// sliders folded away (tune by eye, then hard-code the values you like into
+// DEFAULT_PARAMS in scene.ts) -------------------------------------------------
 
-const SLIDERS: { key: keyof PhysicsParams; label: string; min: number; max: number; step: number }[] = [
+type SliderSpec = { key: keyof PhysicsParams; label: string; min: number; max: number; step: number }
+const SPEED: SliderSpec = { key: 'speed', label: 'Animation speed', min: 0.1, max: 2, step: 0.05 }
+const SLIDERS: SliderSpec[] = [
   { key: 'linkStrength', label: 'Spring stiffness', min: 0, max: 1, step: 0.05 },
   { key: 'pullX', label: 'Pull to target (x)', min: 0, max: 1, step: 0.05 },
   { key: 'pullY', label: 'Pull to target (y)', min: 0, max: 1, step: 0.05 },
   { key: 'repulsion', label: 'Repulsion', min: 0, max: 150, step: 5 },
   { key: 'orderStrength', label: 'Keep branch order', min: 0, max: 1, step: 0.05 },
   { key: 'damping', label: 'Damping', min: 0.05, max: 0.9, step: 0.05 },
-  { key: 'speed', label: 'Animation speed', min: 0.1, max: 2, step: 0.05 },
 ]
 
+// Remembered in the browser: the view and the animation speed.
+const savedSpeed = (() => { try { return Number(localStorage.getItem(SPEED_KEY)) } catch { return NaN } })()
+if (savedSpeed >= SPEED.min && savedSpeed <= SPEED.max) scene.setParams({ speed: savedSpeed })
+
 const sliderInputs = new Map<keyof PhysicsParams, HTMLInputElement>()
-for (const spec of SLIDERS) {
+function makeSlider(spec: SliderSpec, into: HTMLElement, onChange?: (v: number) => void): void {
   const row = document.createElement('label')
   row.className = 'slider'
   row.innerHTML = `<span>${spec.label}</span>
@@ -1210,17 +1235,30 @@ for (const spec of SLIDERS) {
   range.addEventListener('input', () => {
     out.textContent = range.value
     scene.setParams({ [spec.key]: Number(range.value) })
+    onChange?.(Number(range.value))
   })
   sliderInputs.set(spec.key, range)
-  sliders.append(row)
+  into.append(row)
 }
+makeSlider(SPEED, $<HTMLDivElement>('#speed-row'), (v) => {
+  try { localStorage.setItem(SPEED_KEY, String(v)) } catch { /* not saved */ }
+})
+for (const spec of SLIDERS) makeSlider(spec, sliders)
+
+const fadeBox = $<HTMLInputElement>('#fade')
+fadeBox.checked = scene.getFade()
+fadeBox.addEventListener('change', () => scene.setFade(fadeBox.checked))
 
 document.querySelector('#defaults-btn')!.addEventListener('click', () => {
-  scene.setParams(DEFAULT_PARAMS)
-  for (const [key, range] of sliderInputs) {
-    range.value = String(DEFAULT_PARAMS[key])
+  // The physics only: the animation speed and the view stay as you set them.
+  for (const spec of SLIDERS) {
+    const range = sliderInputs.get(spec.key)!
+    range.value = String(DEFAULT_PARAMS[spec.key])
     range.nextElementSibling!.textContent = range.value
+    scene.setParams({ [spec.key]: DEFAULT_PARAMS[spec.key] })
   }
+  fadeBox.checked = false
+  scene.setFade(false)
 })
 
 document.querySelector('#copy-btn')!.addEventListener('click', async (e) => {
@@ -1235,6 +1273,42 @@ document.querySelector('#copy-btn')!.addEventListener('click', async (e) => {
   }
   setTimeout(() => (btn.textContent = 'Copy values'), 1500)
 })
+
+// The view: three buttons. Switching animates (every node keeps its id and
+// glides to its new place), works mid-reduction, and is remembered.
+const viewChoice = $<HTMLDivElement>('#view-choice')
+const viewButtons = new Map<View, HTMLButtonElement>()
+for (const v of VIEWS) {
+  const b = document.createElement('button')
+  b.type = 'button'
+  b.textContent = v.label
+  b.title = v.hint
+  b.setAttribute('role', 'radio')
+  b.dataset.view = v.id
+  b.addEventListener('click', () => setView(v.id))
+  viewButtons.set(v.id, b)
+  viewChoice.append(b)
+}
+function showViewChoice(): void {
+  for (const [v, b] of viewButtons) {
+    const on = v === scene.getView()
+    b.classList.toggle('active', on)
+    b.setAttribute('aria-checked', String(on))
+  }
+}
+function setView(v: View): void {
+  if (v === scene.getView()) return
+  scene.setView(v)
+  try { localStorage.setItem(VIEW_KEY, v) } catch { /* not saved */ }
+  showViewChoice()
+  render()
+  // Trees change shape: bring them all into view if they've grown off screen.
+  scene.revealTrees(ws.trees.map((t) => t.key))
+  say(`View: ${VIEWS.find((x) => x.id === v)!.label}.`)
+}
+const savedView = (() => { try { return localStorage.getItem(VIEW_KEY) } catch { return null } })()
+if (isView(savedView)) scene.setView(savedView)
+showViewChoice()
 
 // Start from ?t=<tree> if the URL has one (handy for sharing), otherwise D.
 input.value = new URLSearchParams(location.search).get('t') ?? D
